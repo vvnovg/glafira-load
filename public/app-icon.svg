@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Исходник иконки Glafira for Load Testing: спидометр (шкала с делениями, стрелка в правой части) и линия пульса на графите. Набор для платформ: pnpm tauri icon public/app-icon.svg -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#55606f"/>
+      <stop offset="1" stop-color="#1c222c"/>
+    </linearGradient>
+    <linearGradient id="body" gradientUnits="userSpaceOnUse" x1="150" y1="0" x2="874" y2="0">
+      <stop offset="0" stop-color="#e3e8ef"/>
+      <stop offset="0.5" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#d3dae4"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+  <!-- Шкала: дуга 220° с центром (512,640) и радиусом 270, открыта вниз; стрелка на 22° уходит под правую полку пульса, чтобы оставаться видимой -->
+  <path d="M258.3 732.3 A270 270 0 1 1 765.7 732.3" fill="none" stroke="url(#body)" stroke-width="66" stroke-linecap="round"/>
+  <!-- Деления: тёмные штрихи поперёк дуги каждые 27.5° -->
+  <g stroke="#3b4554" stroke-width="16" stroke-linecap="round">
+    <path d="M284.6 722.8 L232.0 741.9"/>
+    <path d="M272.1 608.4 L216.5 601.1"/>
+    <path d="M313.8 501.2 L267.9 469.1"/>
+    <path d="M400.3 425.3 L374.4 375.7"/>
+    <path d="M512.0 398.0 L512.0 342.0"/>
+    <path d="M623.7 425.3 L649.6 375.7"/>
+    <path d="M710.2 501.2 L756.1 469.1"/>
+    <path d="M751.9 608.4 L807.5 601.1"/>
+    <path d="M739.4 722.8 L792.0 741.9"/>
+  </g>
+  <!-- Стрелка и ступица -->
+  <path d="M512 640 L711.3 559.5" stroke="url(#body)" stroke-width="44" stroke-linecap="round"/>
+  <circle cx="512" cy="640" r="62" fill="url(#body)"/>
+  <circle cx="512" cy="640" r="22" fill="#3b4554"/>
+  <!-- Пульс: тёмная подложка, чтобы линия читалась и на белом, и на графите -->
+  <path d="M180 512 H372 L424 404 L488 632 L552 352 L612 568 L652 512 H844" fill="none" stroke="#12161d" stroke-width="64" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M180 512 H372 L424 404 L488 632 L552 352 L612 568 L652 512 H844" fill="none" stroke="#ffb020" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
