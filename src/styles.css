@@ -208,10 +208,16 @@ input:invalid { border-color: var(--danger); }
 .registry-body { display: flex; gap: 12px; min-height: 260px; height: max(260px, calc(100vh - 280px)); }
 .registry-body .vlist { flex: 1; overflow: auto; border: 1px solid var(--border); }
 .registry-body .details-pane { width: 42%; overflow: auto; }
-.msg-row { display: grid; grid-template-columns: 1fr auto auto auto auto; gap: 8px; align-items: center; padding: 0 8px; border-bottom: 1px solid var(--border); cursor: pointer; }
+/* ID, сервис, вид, имя, источник, версия, отметка диффа — у заголовка и строк одна сетка. */
+.msg-row { display: grid; grid-template-columns: minmax(160px, 3fr) minmax(70px, 1fr) 120px minmax(80px, 2fr) 70px 80px 70px; gap: 8px; align-items: center; padding: 0 8px; border-bottom: 1px solid var(--border); cursor: pointer; }
 .msg-row > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msg-row.active { background: color-mix(in srgb, var(--accent) 15%, transparent); }
 .msg-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.msg-row.msg-head { position: sticky; top: 0; z-index: 1; background: var(--bg); color: var(--muted); font-size: 12px; font-weight: 600; cursor: default; }
+.kind-badge { display: inline-block; padding: 0 6px; border: 1px solid var(--border); border-radius: 8px; font-size: 11px; line-height: 16px; }
+.kind-kafka_produce, .kind-kafka_consume { border-color: var(--warn); }
+.kind-grpc { border-color: var(--accent); }
+.guessed { color: var(--warn); font-weight: 600; cursor: help; }
 .diff-added { border-left: 3px solid #16a34a; }
 .diff-removed { border-left: 3px solid #8a8f98; }
 .diff-changed { border-left: 3px solid #f59e0b; }

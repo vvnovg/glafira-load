@@ -80,6 +80,20 @@ describe("RegistryPanel", () => {
     expect(api.registryUpdateManual).toHaveBeenCalledWith("/p", op.id, expect.objectContaining({ tags: ["critical", "slow"] }));
   });
 
+  it("renders column headers and service, kind and guessed-topic cells in rows", async () => {
+    renderWithClient(<RegistryPanel path="/p" />);
+    await screen.findByText("Операций: 2");
+    const grid = screen.getByRole("grid");
+    expect(within(grid).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["ID", "Сервис", "Вид", "Имя", "Источник", "Версия", "Дифф"]);
+    const http = screen.getByText("createOrder").closest("[role=row]") as HTMLElement;
+    const kafka = screen.getByText("orders.created").closest("[role=row]") as HTMLElement;
+    expect(within(http).getAllByRole("gridcell").map((c) => c.textContent)).toEqual([op.id, "orders", "HTTP", "createOrder", "openapi", "v2", ""]);
+    expect(http).toHaveAttribute("aria-rowindex", "2");
+    expect(within(http).queryByRole("img", { name: "топик угадан по имени файла" })).toBeNull();
+    expect(within(kafka).getByText("Kafka: отправка")).toHaveClass("kind-badge");
+    expect(within(kafka).getByRole("img", { name: "топик угадан по имени файла" })).toBeInTheDocument();
+  });
+
   it("marks rows from the diff of the last two scans", async () => {
     renderWithClient(<RegistryPanel path="/p" />);
     const toggle = await screen.findByRole("checkbox", { name: /Дифф/ });
@@ -112,7 +126,8 @@ describe("RegistryPanel", () => {
     const rendered = screen.getAllByRole("row");
     expect(rendered.length).toBeGreaterThan(0);
     expect(rendered.length).toBeLessThan(100);
-    expect(screen.getByRole("grid")).toHaveAttribute("aria-rowcount", "5000");
+    // Строки данных плюс строка заголовков.
+    expect(screen.getByRole("grid")).toHaveAttribute("aria-rowcount", "5001");
   });
 
   it("moves the selection with arrow keys and Enter selects", async () => {

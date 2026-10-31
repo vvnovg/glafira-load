@@ -19,7 +19,11 @@ const ROW_HEIGHT = 32;
 const PAGE_STEP = 10;
 const INITIAL_RECT = { width: 800, height: 600 };
 
-/** Размер окна списка; пока он нулевой (jsdom, скрытая вкладка), берём начальный, чтобы строки отрисовались. */
+/**
+ * Размер окна списка. У jsdom нет раскладки, а у скрытой вкладки размер нулевой: виртуализатор
+ * тогда не отрисовал бы ни одной строки. Пока прямоугольник пустой, подставляем начальный размер;
+ * настоящий придёт следующим вызовом ResizeObserver, когда окно станет видимым.
+ */
 const observeRect: typeof observeElementRect = (instance, cb) => observeElementRect(instance, (r) => cb(r.height > 0 && r.width > 0 ? r : INITIAL_RECT));
 
 type Mark = "added" | "removed" | "changed";
@@ -140,7 +144,18 @@ export function RegistryPanel({ path }: { path: string }) {
   const clones = useMemo(() => Object.fromEntries((project.data?.manifest.services ?? []).map((s) => [s.id, joinProjectPath(path, s.path)])), [project.data, path]);
   const parentRef = useRef<HTMLDivElement>(null);
   const list: OperationRow[] = rows.data ?? [];
-  const virtual = useVirtualizer({ count: list.length, getScrollElement: () => parentRef.current, estimateSize: () => ROW_HEIGHT, overscan: 10, initialRect: INITIAL_RECT, observeElementRect: observeRect });
+  // Строка заголовков прилипает сверху окна списка: строки начинаются на её высоту ниже (scrollMargin),
+  // а прокрутка к строке не прячет её под заголовком (scrollPaddingStart).
+  const virtual = useVirtualizer({
+    count: list.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: 10,
+    initialRect: INITIAL_RECT,
+    observeElementRect: observeRect,
+    scrollMargin: ROW_HEIGHT,
+    scrollPaddingStart: ROW_HEIGHT,
+  });
   const items = virtual.getVirtualItems();
   const selectedIndex = selected ? list.findIndex((r) => r.id === selected) : -1;
   // Единственная точка входа с Tab: выбранная строка, а если её не видно — первая из отрисованных.
@@ -254,7 +269,16 @@ export function RegistryPanel({ path }: { path: string }) {
         />
       )}
       <div className="registry-body">
-        <div className="vlist" ref={parentRef} role="grid" aria-label={t("registry.title")} aria-rowcount={list.length}>
+        <div className="vlist" ref={parentRef} role="grid" aria-label={t("registry.title")} aria-rowcount={list.length + 1}>
+          <div role="row" aria-rowindex={1} className="msg-row msg-head" style={{ height: ROW_HEIGHT }}>
+            <span role="columnheader">ID</span>
+            <span role="columnheader">{t("registry.service")}</span>
+            <span role="columnheader">{t("registry.kind")}</span>
+            <span role="columnheader">{t("registry.name")}</span>
+            <span role="columnheader">{t("registry.sourceLabel")}</span>
+            <span role="columnheader">{t("registry.version")}</span>
+            <span role="columnheader">{t("registry.change")}</span>
+          </div>
           <div style={{ height: virtual.getTotalSize(), position: "relative" }}>
             {items.map((v) => {
               const r = list[v.index];
@@ -264,16 +288,30 @@ export function RegistryPanel({ path }: { path: string }) {
                 <div
                   key={r.id}
                   role="row"
-                  aria-rowindex={v.index + 1}
+                  aria-rowindex={v.index + 2}
                   aria-selected={selected === r.id}
                   data-index={v.index}
                   tabIndex={v.index === tabStop ? 0 : -1}
                   className={["msg-row", selected === r.id ? "active" : "", mark ? `diff-${mark}` : "", r.status === "removed" ? "muted" : ""].join(" ")}
-                  style={{ position: "absolute", top: v.start, height: ROW_HEIGHT, width: "100%" }}
+                  style={{ position: "absolute", top: v.start - ROW_HEIGHT, height: ROW_HEIGHT, width: "100%" }}
                   onClick={() => setSelected(r.id)}
                   onKeyDown={(e) => onRowKey(e, v.index)}
                 >
-                  <code role="gridcell">{r.id}</code>
+                  <span role="gridcell" title={r.id}>
+                    <code>{r.id}</code>
+                    {r.topicGuessed && (
+                      <>
+                        {" "}
+                        <span className="guessed" role="img" title={t("registry.topicGuessed")} aria-label={t("registry.topicGuessed")}>
+                          ?
+                        </span>
+                      </>
+                    )}
+                  </span>
+                  <span role="gridcell">{r.service}</span>
+                  <span role="gridcell">
+                    <span className={`kind-badge kind-${r.kind}`}>{t(`registry.kinds.${r.kind}`)}</span>
+                  </span>
                   <span role="gridcell" className="muted">{r.name}</span>
                   <span role="gridcell" className="muted">{r.source}</span>
                   <span role="gridcell" className="muted">{r.lastVersion}</span>
@@ -284,7 +322,7 @@ export function RegistryPanel({ path }: { path: string }) {
           </div>
           {rows.data && list.length === 0 && <p className="empty">{t("registry.empty")}</p>}
         </div>
-        {selected && <OperationDetails path={path} id={selected} clones={clones} readOnly={project.data?.readOnly} onDeleted={() => setSelected(null)} />}
+        {selected && <OperationDetails key={selected} path={path} id={selected} clones={clones} readOnly={project.data?.readOnly} onDeleted={() => setSelected(null)} />}
       </div>
       {scanList.length > 0 && <ScansSection scans={scanList} from={from ?? ""} to={to ?? ""} onFrom={setFromPick} onTo={setToPick} />}
       <TablesSection path={path} />

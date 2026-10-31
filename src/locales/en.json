@@ -337,7 +337,9 @@
     "scanCounts": "added {{added}}, changed {{changed}}, removed {{removed}}, restored {{restored}}",
     "tables": "Tables from migrations",
     "noTables": "No tables found: scan a service with SQL migrations",
-    "notNull": "NOT NULL"
+    "notNull": "NOT NULL",
+    "version": "Version",
+    "change": "Diff"
   },
   "template": {
     "sheets": {

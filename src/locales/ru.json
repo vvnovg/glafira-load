@@ -341,7 +341,9 @@
     "scanCounts": "добавлено {{added}}, изменено {{changed}}, удалено {{removed}}, восстановлено {{restored}}",
     "tables": "Таблицы из миграций",
     "noTables": "Таблиц нет: разберите сервис с SQL-миграциями",
-    "notNull": "не может быть NULL"
+    "notNull": "не может быть NULL",
+    "version": "Версия",
+    "change": "Дифф"
   },
   "template": {
     "sheets": {
