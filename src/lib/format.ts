@@ -21,6 +21,12 @@ export function formatBytes(n: number): string {
   return `${num(n / (1024 * 1024), 1)} MB`;
 }
 
+/** Число по языку интерфейса, дробная часть — до `maxDigits` знаков; нет значения — «—». */
+export function formatNumber(n?: number | null, maxDigits = 2): string {
+  if (n === undefined || n === null || !Number.isFinite(n)) return "—";
+  return n.toLocaleString(currentLocale(), { maximumFractionDigits: maxDigits });
+}
+
 /** undefined — ещё загружается, null — недоступно. */
 export function formatCount(n?: number | null): string {
   if (n === undefined) return "…";

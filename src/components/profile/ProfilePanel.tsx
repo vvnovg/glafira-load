@@ -8,7 +8,7 @@ import { tabId } from "../../state/workspace";
 import { ErrorBanner } from "../common/ErrorBanner";
 import { Hint } from "../common/Hint";
 import { NumberInput } from "../common/NumberInput";
-import { invalidPhaseFields, PhaseEditor } from "./PhaseEditor";
+import { invalidPhaseFields, PhaseEditor, phaseBoundaries } from "./PhaseEditor";
 import { TimelineChart } from "./TimelineChart";
 
 const EMPTY_ROWS: Record<string, Override> = {};
@@ -230,7 +230,7 @@ export function ProfilePanel({ path }: { path: string }) {
         <section className={computed.isPlaceholderData ? "stale" : undefined} aria-busy={computed.isPlaceholderData || undefined}>
           <h3>{t("profile.targets", { profile: c.profile, total: c.total.toFixed(1), minutes: c.total_minutes })}</h3>
           {dirty && <p className="muted">{t("profile.computedFromSaved")}</p>}
-          <TimelineChart points={c.timeline} total={c.total} />
+          <TimelineChart points={c.timeline} total={c.total} boundaries={phaseBoundaries(file.data.profiles[c.profile]?.phases ?? [])} />
           <table>
             <thead>
               <tr>

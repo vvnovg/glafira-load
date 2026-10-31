@@ -18,6 +18,28 @@ function blank(kind: Phase["kind"]): Phase {
   }
 }
 
+/** Длительность фазы в минутах — как в `timeline` расчёта профиля (у ступеней — число ступеней × минуты ступени). */
+function phaseMinutes(p: Phase): number {
+  switch (p.kind) {
+    case "ramp":
+    case "steady":
+      return p.minutes;
+    case "steps":
+      return Math.max(0, Math.floor((p.max_pct + 1e-9) / p.step_pct)) * p.step_minutes;
+  }
+}
+
+/** Минуты границ между фазами (без начала и конца ряда, без повторов от фаз нулевой длины). */
+export function phaseBoundaries(phases: Phase[]): number[] {
+  const out: number[] = [];
+  let t = 0;
+  phases.slice(0, -1).forEach((p) => {
+    t += phaseMinutes(p);
+    if (Number.isFinite(t) && t > 0 && out[out.length - 1] !== t) out.push(t);
+  });
+  return out;
+}
+
 /** Поля фазы, не прошедшие ту же проверку, что и в расчёте профиля (бэкенд всё равно проверит при сохранении). */
 export function invalidPhaseFields(p: Phase): string[] {
   const bad: string[] = [];

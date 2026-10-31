@@ -1,14 +1,7 @@
 import { useTranslation } from "react-i18next";
-import type { Figures, TemplatePreview } from "../../api/types";
-
-function figures(f: Figures | null): string {
-  if (!f) return "—";
-  const parts = [`${f.avg}/${f.peak}`];
-  if (f.error_pct !== undefined) parts.push(`${f.error_pct}%`);
-  if (f.p95_ms !== undefined) parts.push(`p95 ${f.p95_ms}`);
-  if (f.lag_max_s !== undefined) parts.push(`lag ${f.lag_max_s}s`);
-  return parts.join(" · ");
-}
+import type { TemplatePreview } from "../../api/types";
+import { kindFromId } from "../../lib/units";
+import { figuresText } from "./figures";
 
 /** Предпросмотр импорта: счётчики, ошибки по строкам, дифф цифр; «Применить» только без ошибок и не в проекте только для чтения. */
 export function ImportPreviewView({ preview, onApply, onCancel, busy, readOnly = false }: { preview: TemplatePreview; onApply: () => void; onCancel: () => void; busy: boolean; readOnly?: boolean }) {
@@ -72,8 +65,8 @@ export function ImportPreviewView({ preview, onApply, onCancel, busy, readOnly =
                 <td>
                   <code>{d.id}</code>
                 </td>
-                <td className="muted">{figures(d.old)}</td>
-                <td>{figures(d.new)}</td>
+                <td className="muted">{figuresText(t, kindFromId(d.id), d.old)}</td>
+                <td>{figuresText(t, kindFromId(d.id), d.new)}</td>
               </tr>
             ))}
           </tbody>

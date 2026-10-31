@@ -4,10 +4,13 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../../api/client";
 import type { TemplatePreview } from "../../api/types";
+import { formatNumber } from "../../lib/format";
+import { unitFor } from "../../lib/units";
 import { useHelpChapter } from "../../state/helpContext";
 import { tabId } from "../../state/workspace";
 import { ErrorBanner } from "../common/ErrorBanner";
 import { Hint } from "../common/Hint";
+import { latencyText } from "./figures";
 import { ImportPreviewView } from "./ImportPreviewView";
 import { templateLabels } from "./templateLabels";
 
@@ -88,12 +91,13 @@ export function ProdLoadPanel({ path }: { path: string }) {
         <thead>
           <tr>
             <th>ID</th>
-            <th>{t("template.columns.kind")}</th>
-            <th>{t("template.columns.avg")}</th>
-            <th>{t("template.columns.peak")}</th>
-            <th>{t("template.columns.errorPct")}</th>
-            <th>{t("template.columns.p95")}</th>
-            <th>{t("template.columns.comment")}</th>
+            <th>{t("prodLoad.columns.kind")}</th>
+            <th>{t("prodLoad.columns.avg")}</th>
+            <th>{t("prodLoad.columns.peak")}</th>
+            <th>{t("prodLoad.columns.unit")}</th>
+            <th>{t("prodLoad.columns.errorPct")}</th>
+            <th>{t("prodLoad.columns.latency")}</th>
+            <th>{t("prodLoad.columns.comment")}</th>
           </tr>
         </thead>
         <tbody>
@@ -105,10 +109,11 @@ export function ProdLoadPanel({ path }: { path: string }) {
                   <code>{r.id}</code>
                 </td>
                 <td>{t(`registry.kinds.${r.kind}`)}</td>
-                <td>{f?.avg ?? "—"}</td>
-                <td>{f?.peak ?? "—"}</td>
-                <td>{f?.error_pct ?? "—"}</td>
-                <td>{f ? (r.kind === "kafka_consume" ? (f.lag_max_s !== undefined ? `${f.lag_max_s} s` : "—") : (f.p95_ms ?? "—")) : "—"}</td>
+                <td>{formatNumber(f?.avg)}</td>
+                <td>{formatNumber(f?.peak)}</td>
+                <td className="muted">{t(`units.${unitFor(r.kind)}`)}</td>
+                <td>{f?.error_pct !== undefined ? t("units.percent", { value: formatNumber(f.error_pct) }) : "—"}</td>
+                <td>{f ? latencyText(t, r.kind, f) : "—"}</td>
                 <td>{f?.comment ?? ""}</td>
               </tr>
             );

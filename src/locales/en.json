@@ -409,7 +409,21 @@
     "skippedRows": "Rows with figures but no ID, skipped: {{count}}",
     "before": "Before",
     "after": "After",
-    "apply": "Apply"
+    "apply": "Apply",
+    "columns": {
+      "kind": "Kind",
+      "avg": "Average",
+      "peak": "Peak",
+      "unit": "Unit",
+      "errorPct": "Errors",
+      "latency": "p95 / consumer lag",
+      "comment": "Comment"
+    },
+    "figures": {
+      "pair": "{{avg}}/{{peak}} {{unit}}",
+      "p95": "p95 {{value}}",
+      "lag": "lag {{value}}"
+    }
   },
   "profile": {
     "title": "Load profile",
@@ -450,5 +464,12 @@
     "uncovered": "Not covered by production figures: {{count}}",
     "chartMinutes": "minutes",
     "saveToCompute": "The profile is not saved yet: save to compute its targets"
+  },
+  "units": {
+    "rps": "RPS",
+    "msgPerSec": "msg/s",
+    "ms": "{{value}} ms",
+    "seconds": "{{value}} s",
+    "percent": "{{value}}%"
   }
 }

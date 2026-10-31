@@ -1,9 +1,11 @@
 {
   "ru": [
     "errors.generic",
+    "prodLoad.figures.p95",
     "registry.kinds.grpc",
     "registry.kinds.http",
     "registry.kinds.sql",
-    "template.columns.id"
+    "template.columns.id",
+    "units.rps"
   ]
 }

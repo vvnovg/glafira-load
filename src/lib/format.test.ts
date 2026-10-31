@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { i18n } from "../i18n";
-import { formatBytes, formatCount, formatTimestamp } from "./format";
+import { formatBytes, formatCount, formatNumber, formatTimestamp } from "./format";
 
 describe("format", () => {
   it("timestamp в UTC с миллисекундами", () => {
@@ -29,5 +29,10 @@ describe("форматы по языку", () => {
     await i18n.changeLanguage("ru");
     expect(formatCount(1234567)).toBe("1 234 567".replace(/ /g, "\u00a0"));
     expect(formatBytes(1536)).toBe("1,5 KB");
+    expect(formatNumber(1234.5)).toBe("1 234,5".replace(/ /g, "\u00a0"));
+    expect(formatNumber(0.125, 2)).toBe("0,13");
+    expect(formatNumber(undefined)).toBe("—");
+    await i18n.changeLanguage("en");
+    expect(formatNumber(1234.5)).toBe("1,234.5");
   });
 });

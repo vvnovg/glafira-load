@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import type { ProdLoad, TemplateLabels, TemplatePreview } from "../../api/types";
@@ -67,6 +67,7 @@ describe("ProdLoadPanel", () => {
     expect(await screen.findByText(/Заполнено 1, пустых 0, неизвестных ID 1, с ошибками 1/)).toBeInTheDocument();
     expect(screen.getByText("пик меньше среднего")).toBeInTheDocument();
     expect(screen.getByText("Строк с цифрами без ID, пропущено: 2")).toBeInTheDocument();
+    expect(screen.getByText("1/2 RPS")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Применить" })).toBeDisabled();
   });
 
@@ -81,6 +82,22 @@ describe("ProdLoadPanel", () => {
     await userEvent.click(applyButton);
     expect(api.prodLoadApplyImport).toHaveBeenCalledWith("/p", "/in/filled.xlsx");
     await waitFor(() => expect(screen.queryByText("Предпросмотр импорта")).not.toBeInTheDocument());
+  });
+
+  it("shows units and latency per row kind with localized numbers", async () => {
+    api.prodLoadGet.mockResolvedValueOnce({
+      format: 1,
+      source: { ...preview.source, stand: "" },
+      operations: { "http:o:POST /a": { avg: 1234.5, peak: 2000, error_pct: 0.25, p95_ms: 120 }, "kafka_consume:t": { avg: 1.5, peak: 3, lag_max_s: 4 } },
+    });
+    renderWithClient(<ProdLoadPanel path="/p" />);
+    const http = (await screen.findByText("http:o:POST /a")).closest("tr") as HTMLElement;
+    const kafka = screen.getByText("kafka_consume:t").closest("tr") as HTMLElement;
+    const cells = (row: HTMLElement) => within(row).getAllByRole("cell").map((c) => c.textContent);
+    const nbsp = (s: string) => s.replace(/ /g, "\u00a0");
+    expect(cells(http)).toEqual(["http:o:POST /a", "HTTP", nbsp("1 234,5"), nbsp("2 000"), "RPS", "0,25%", "120 мс", ""]);
+    expect(cells(kafka)).toEqual(["kafka_consume:t", "Kafka: чтение", "1,5", "3", "сообщ./с", "—", "4 с", ""]);
+    expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["ID", "Вид", "Среднее", "Пик", "Ед.", "Ошибки", "p95 / лаг потребителя", "Комментарий"]);
   });
 
   it("disables import and apply in a read-only project but keeps the export", async () => {

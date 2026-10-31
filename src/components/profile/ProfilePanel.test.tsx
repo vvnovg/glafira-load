@@ -18,7 +18,7 @@ const { api, plot, state } = vi.hoisted(() => {
       },
     },
   };
-  const plot = { created: 0, destroyed: 0, observed: 0, disconnected: 0 };
+  const plot = { created: 0, destroyed: 0, observed: 0, disconnected: 0, opts: null as null | { hooks?: { draw?: ((u: unknown) => void)[] } } };
   const api = {
     projectView: vi.fn(async () => ({ path: "/p", manifest: { format: 1, name: "P", services: [], environments: [] }, problems: [], readOnly: state.readOnly, missingServices: [] })),
     profileGet: vi.fn(async () => state.file),
@@ -38,8 +38,9 @@ const { api, plot, state } = vi.hoisted(() => {
 vi.mock("../../api/client", () => ({ api, toAppError: (e: unknown) => e }));
 vi.mock("uplot", () => ({
   default: class {
-    constructor() {
+    constructor(opts: typeof plot.opts) {
       plot.created++;
+      plot.opts = opts;
     }
     setSize() {}
     destroy() {
@@ -104,6 +105,18 @@ describe("ProfilePanel", () => {
     unmount();
     expect(plot.destroyed).toBe(plot.created);
     expect(plot.disconnected).toBe(plot.observed);
+  });
+
+  it("draws phase boundaries of the computed profile on the chart", async () => {
+    renderWithClient(<ProfilePanel path="/p" />);
+    await screen.findByText(/Цели профиля nominal/);
+    // nominal: разгон 10 минут, затем полка — граница одна, на 10-й минуте.
+    const ctx = { save: vi.fn(), restore: vi.fn(), beginPath: vi.fn(), moveTo: vi.fn(), lineTo: vi.fn(), stroke: vi.fn(), setLineDash: vi.fn(), strokeStyle: "", lineWidth: 0 };
+    const draw = plot.opts?.hooks?.draw?.[0];
+    expect(draw).toBeTypeOf("function");
+    draw?.({ ctx, bbox: { top: 5, height: 100 }, valToPos: (v: number) => v * 3 });
+    expect(ctx.moveTo.mock.calls).toEqual([[30.5, 5]]);
+    expect(ctx.lineTo.mock.calls).toEqual([[30.5, 105]]);
   });
 
   it("adds a service override when the file has no override maps", async () => {

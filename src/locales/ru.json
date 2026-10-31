@@ -413,7 +413,21 @@
     "skippedRows": "Строк с цифрами без ID, пропущено: {{count}}",
     "before": "Было",
     "after": "Станет",
-    "apply": "Применить"
+    "apply": "Применить",
+    "columns": {
+      "kind": "Вид",
+      "avg": "Среднее",
+      "peak": "Пик",
+      "unit": "Ед.",
+      "errorPct": "Ошибки",
+      "latency": "p95 / лаг потребителя",
+      "comment": "Комментарий"
+    },
+    "figures": {
+      "pair": "{{avg}}/{{peak}} {{unit}}",
+      "p95": "p95 {{value}}",
+      "lag": "лаг {{value}}"
+    }
   },
   "profile": {
     "title": "Профиль нагрузки",
@@ -454,5 +468,12 @@
     "uncovered": "Не покрыто цифрами ПРОМ: {{count}}",
     "chartMinutes": "минуты",
     "saveToCompute": "Профиль ещё не сохранён: сохраните, чтобы посчитать цели"
+  },
+  "units": {
+    "rps": "RPS",
+    "msgPerSec": "сообщ./с",
+    "ms": "{{value}} мс",
+    "seconds": "{{value}} с",
+    "percent": "{{value}}%"
   }
 }
