@@ -192,7 +192,6 @@ label.inline { display: inline-flex; gap: 4px; align-items: center; white-space:
 
 /* Дерево проектов и вкладка «Проект» */
 .tree > li.tree-folder { display: block; }
-.tree-folder.tree-error { margin: 0; font-size: inherit; }
 button.tree-caret { background: none; border: none; padding: 0; width: 12px; }
 button.tree-name { text-align: left; }
 .form.stack { display: flex; flex-direction: column; align-items: stretch; gap: 8px; max-width: 760px; min-width: 0; margin: 0; padding: 0; border: none; }

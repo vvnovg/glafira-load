@@ -230,7 +230,8 @@
       "empty_service_path": "У сервиса «{{id}}» нет папки",
       "bad_environment_id": "Плохой ID стенда «{{id}}»",
       "duplicate_environment_id": "Повтор ID стенда «{{id}}»"
-    }
+    },
+    "fixToSave": "Исправьте манифест, чтобы сохранить:"
   },
   "service": {
     "scan": "Разобрать",
@@ -267,7 +268,8 @@
     "newTopicDirection": "Направление нового топика",
     "addTopic": "Добавить топик",
     "openScan": "Открыть снимок разбора",
-    "openRegistry": "Открыть реестр"
+    "openRegistry": "Открыть реестр",
+    "duplicateContract": "Такой вид и путь уже есть в списке: не сохранено"
   },
   "registry": {
     "title": "Реестр операций",

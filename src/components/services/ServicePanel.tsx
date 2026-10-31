@@ -3,7 +3,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../../api/client";
-import type { ContractKind, ContractRef, Direction, Manifest, ScanProgress, ScanReport, Service, TopicSchema } from "../../api/types";
+import type { ContractKind, ContractRef, Direction, Manifest, Project, ScanProgress, ScanReport, Service, TopicSchema } from "../../api/types";
 import { joinProjectPath, projectRelative } from "../../lib/paths";
 import { useHelpChapter } from "../../state/helpContext";
 import { tabId } from "../../state/workspace";
@@ -22,31 +22,37 @@ function normalize(c: ContractRef): ContractRef {
 
 const parseList = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
 
-function ContractRow({ c, clone, project, disabled, onChange, onRemove }: { c: ContractRef; clone: string; project: string; disabled: boolean; onChange: (c: ContractRef) => void; onRemove: () => void }) {
+/** `onChange` возвращает false, если правка отклонена (такой вид и путь уже есть в списке). */
+function ContractRow({ c, clone, project, disabled, onChange, onRemove }: { c: ContractRef; clone: string; project: string; disabled: boolean; onChange: (c: ContractRef) => boolean; onRemove: () => void }) {
   const { t } = useTranslation();
   const [path, setPath] = useState(c.path);
   const [include, setInclude] = useState((c.include ?? []).join(", "));
+  // Правка дала повтор другой строки: строка помечается, манифест не сохраняется.
+  const [duplicate, setDuplicate] = useState(false);
   const openFile = useMutation({ mutationFn: () => api.openPath(project, joinProjectPath(clone, c.path)) });
   const commitPath = () => {
     const next = path.trim();
-    if (next && next !== c.path) onChange({ ...c, path: next });
-    else setPath(c.path);
+    if (next && next !== c.path) setDuplicate(!onChange({ ...c, path: next }));
+    else {
+      setPath(c.path);
+      setDuplicate(false);
+    }
   };
   const commitInclude = () => {
     const next = parseList(include);
-    if (next.join("\n") !== (c.include ?? []).join("\n")) onChange({ ...c, include: next });
+    if (next.join("\n") !== (c.include ?? []).join("\n")) void onChange({ ...c, include: next });
   };
   return (
     <li className="row">
-      <input type="checkbox" aria-label={c.path} checked={c.enabled ?? true} disabled={disabled} onChange={(e) => onChange({ ...c, enabled: e.target.checked })} />
-      <select aria-label={t("service.kind", { path: c.path })} value={c.kind} disabled={disabled} onChange={(e) => onChange({ ...c, kind: e.target.value as ContractKind })}>
+      <input type="checkbox" aria-label={c.path} checked={c.enabled ?? true} disabled={disabled} onChange={(e) => void onChange({ ...c, enabled: e.target.checked })} />
+      <select aria-label={t("service.kind", { path: c.path })} aria-invalid={duplicate || undefined} value={c.kind} disabled={disabled} onChange={(e) => setDuplicate(!onChange({ ...c, kind: e.target.value as ContractKind }))}>
         {KINDS.map((k) => (
           <option key={k} value={k}>
             {k}
           </option>
         ))}
       </select>
-      <input aria-label={t("service.path", { path: c.path })} value={path} disabled={disabled} onChange={(e) => setPath(e.target.value)} onBlur={commitPath} />
+      <input aria-label={t("service.path", { path: c.path })} aria-invalid={duplicate || undefined} value={path} disabled={disabled} onChange={(e) => setPath(e.target.value)} onBlur={commitPath} />
       <input aria-label={t("service.include", { path: c.path })} placeholder={t("service.includePlaceholder")} value={include} disabled={disabled} onChange={(e) => setInclude(e.target.value)} onBlur={commitInclude} />
       <button type="button" className="link" onClick={() => openFile.mutate()}>
         {t("service.openFile")}
@@ -54,6 +60,7 @@ function ContractRow({ c, clone, project, disabled, onChange, onRemove }: { c: C
       <button type="button" className="icon" aria-label={t("service.removeContract", { path: c.path })} disabled={disabled} onClick={onRemove}>
         ×
       </button>
+      {duplicate && <span className="warn">{t("service.duplicateContract")}</span>}
       {openFile.error && <ErrorBanner error={openFile.error} />}
     </li>
   );
@@ -219,7 +226,12 @@ export function ServicePanel({ path, serviceId }: { path: string; serviceId: str
   const contracts: ContractRef[] = explicit ? service.contracts : (discovered.data ?? []);
   const editDisabled = save.isPending || readOnly;
 
-  const saveService = (patch: (s: Service) => Service) => save.mutate({ ...manifest, services: manifest.services.map((s) => (s.id === serviceId ? patch(s) : s)) });
+  // Правка накладывается на последний манифест из кэша: после await (поиск контрактов) снимок рендера мог устареть.
+  const latestManifest = () => qc.getQueryData<Project>(["project", path])?.manifest ?? manifest;
+  const saveService = (patch: (s: Service) => Service) => {
+    const base = latestManifest();
+    save.mutate({ ...base, services: base.services.map((s) => (s.id === serviceId ? patch(s) : s)) });
+  };
   const writeContracts = (next: ContractRef[]) => saveService((s) => ({ ...s, contracts: next.map(normalize) }));
   const writeTopics = (topics: Record<string, TopicSchema>) =>
     saveService((s) => {
@@ -228,11 +240,20 @@ export function ServicePanel({ path, serviceId }: { path: string; serviceId: str
       else delete next.kafka;
       return next;
     });
-  const change = (i: number, c: ContractRef) => writeContracts(contracts.map((x, j) => (j === i ? c : x)));
+  /** Правка строки; повтор вида и пути другой строки не сохраняется (false). */
+  const change = (i: number, c: ContractRef): boolean => {
+    if (contracts.some((x, j) => j !== i && sameContract(x, c))) return false;
+    writeContracts(contracts.map((x, j) => (j === i ? c : x)));
+    return true;
+  };
   const mergeDiscovered = async () => {
     const found = await discover.mutateAsync();
-    const fresh = found.filter((f) => !contracts.some((x) => sameContract(x, f)));
-    if (fresh.length > 0 || !explicit) writeContracts([...contracts, ...fresh]);
+    // Список берём из свежего манифеста: пока шёл поиск, его могли сохранить другие правки.
+    const current = latestManifest().services.find((s) => s.id === serviceId)?.contracts ?? [];
+    const fresh = found.filter((f) => !current.some((x) => sameContract(x, f)));
+    // Нового нет — манифест не трогаем (и не пишем пустой список, если не нашлось ничего).
+    if (fresh.length === 0) return;
+    writeContracts([...current, ...fresh]);
   };
 
   return (

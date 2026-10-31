@@ -50,4 +50,33 @@ describe("ProjectPanel", () => {
     expect(api.projectCreate).toHaveBeenCalledWith("/p/created", "New one");
     expect(useWorkspace.getState().tabs.map((t) => t.id)).toEqual(["project:/p/created"]);
   });
+
+  it("validates service and environment ids before saving", async () => {
+    renderWithClient(<ProjectPanel path="/p/orders" />);
+    const id = await screen.findByLabelText("ID сервиса");
+    await userEvent.type(id, " X");
+    expect(id).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText("Плохой ID сервиса «orders X» (a–z, 0–9, дефис)")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
+    await userEvent.clear(id);
+    await userEvent.type(id, "orders-2");
+    expect(id).not.toHaveAttribute("aria-invalid");
+    expect(screen.getByRole("button", { name: "Сохранить" })).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", { name: "Добавить стенд" }));
+    const envIds = screen.getAllByLabelText("ID стенда");
+    await userEvent.type(envIds[1], "test");
+    expect(envIds[1]).toHaveAttribute("aria-invalid", "true");
+    expect(envIds[0]).not.toHaveAttribute("aria-invalid");
+    expect(screen.getByText("Повтор ID стенда «test»")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
+    expect(api.projectSave).not.toHaveBeenCalled();
+  });
+
+  it("lists manifest problems returned by the backend", async () => {
+    api.projectSave.mockRejectedValueOnce({ code: "INVALID_INPUT", message: "The manifest has 1 problem(s)", retryable: false, details: JSON.stringify([{ kind: "empty_service_path", id: "orders" }]) });
+    renderWithClient(<ProjectPanel path="/p/orders" />);
+    await userEvent.type(await screen.findByLabelText("Имя проекта"), "!");
+    await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+    expect(await screen.findByText("У сервиса «orders» нет папки")).toBeInTheDocument();
+  });
 });

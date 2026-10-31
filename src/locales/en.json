@@ -230,7 +230,8 @@
       "empty_service_path": "Service “{{id}}” has no folder",
       "bad_environment_id": "Bad environment ID “{{id}}”",
       "duplicate_environment_id": "Duplicate environment ID “{{id}}”"
-    }
+    },
+    "fixToSave": "Fix the manifest to save:"
   },
   "service": {
     "scan": "Scan",
@@ -267,7 +268,8 @@
     "newTopicDirection": "Direction of the new topic",
     "addTopic": "Add topic",
     "openScan": "Open scan snapshot",
-    "openRegistry": "Open registry"
+    "openRegistry": "Open registry",
+    "duplicateContract": "This kind and path are already in the list: not saved"
   },
   "registry": {
     "title": "Operation registry",

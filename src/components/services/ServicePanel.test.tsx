@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { renderWithClient } from "../../test/render";
@@ -134,5 +134,62 @@ describe("ServicePanel", () => {
     expect(screen.getByRole("button", { name: "Разобрать" })).toBeDisabled();
     expect(api.serviceDiscoverContracts).not.toHaveBeenCalled();
     expect(within(document.body).queryByText("proto/x.proto")).toBeNull();
+  });
+
+  it("marks a row that would duplicate another contract and does not save it", async () => {
+    state.project.manifest.services = [{ ...service, contracts: [{ kind: "sql", path: "db/V1.sql" }, { kind: "sql", path: "db/V2.sql" }] }];
+    renderWithClient(<ServicePanel path="/p/orders" serviceId="orders" />);
+    const path = await screen.findByLabelText("Путь контракта db/V2.sql");
+    await userEvent.clear(path);
+    await userEvent.type(path, "db/V1.sql");
+    await userEvent.tab();
+    expect(path).toHaveAttribute("aria-invalid", "true");
+    expect(path).toHaveValue("db/V1.sql");
+    expect(screen.getByText("Такой вид и путь уже есть в списке: не сохранено")).toBeInTheDocument();
+    expect(api.projectSave).not.toHaveBeenCalled();
+    // Вернули прежний путь — отметка снимается.
+    await userEvent.clear(path);
+    await userEvent.type(path, "db/V2.sql");
+    await userEvent.tab();
+    expect(path).not.toHaveAttribute("aria-invalid");
+    expect(screen.queryByText("Такой вид и путь уже есть в списке: не сохранено")).toBeNull();
+  });
+
+  it("does not write the manifest when discovery finds nothing new", async () => {
+    state.project.manifest.services = [{ ...service, contracts: [{ kind: "openapi", path: "api/openapi.yaml" }, { kind: "proto", path: "proto/x.proto" }] }];
+    renderWithClient(<ServicePanel path="/p/orders" serviceId="orders" />);
+    await screen.findByLabelText("api/openapi.yaml");
+    await userEvent.click(screen.getByRole("button", { name: "Найти контракты" }));
+    await vi.waitFor(() => expect(api.serviceDiscoverContracts).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Найти контракты" })).toBeEnabled());
+    expect(api.projectSave).not.toHaveBeenCalled();
+  });
+
+  it("does not write an empty contract list when nothing was found", async () => {
+    api.serviceDiscoverContracts.mockResolvedValue([]);
+    renderWithClient(<ServicePanel path="/p/orders" serviceId="orders" />);
+    expect(await screen.findByText(/Контракты не найдены/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Найти контракты" }));
+    await waitFor(() => expect(api.serviceDiscoverContracts).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Найти контракты" })).toBeEnabled());
+    expect(api.projectSave).not.toHaveBeenCalled();
+  });
+
+  it("merges discovered contracts into the latest manifest, not the one captured before the search", async () => {
+    state.project.manifest.services = [{ ...service, contracts: [{ kind: "openapi", path: "api/openapi.yaml" }] }];
+    const { client } = renderWithClient(<ServicePanel path="/p/orders" serviceId="orders" />);
+    await screen.findByLabelText("api/openapi.yaml");
+    let finish: (v: unknown) => void = () => undefined;
+    api.serviceDiscoverContracts.mockImplementationOnce(() => new Promise((r) => (finish = r)) as never);
+    await userEvent.click(screen.getByRole("button", { name: "Найти контракты" }));
+    // Пока шёл поиск, манифест сохранили с топиком Kafka.
+    const latest = { ...state.project, manifest: { ...state.project.manifest, services: [{ ...service, contracts: [{ kind: "openapi", path: "api/openapi.yaml" }], kafka: { topics: { "orders.paid": "schemas/paid.avsc" } } }] } };
+    act(() => client.setQueryData(["project", "/p/orders"], latest));
+    await act(async () => finish([{ kind: "proto", path: "proto/x.proto" }]));
+    await vi.waitFor(() => expect(api.projectSave).toHaveBeenCalled());
+    expect(api.projectSave).toHaveBeenCalledWith(
+      "/p/orders",
+      expect.objectContaining({ services: [expect.objectContaining({ contracts: [{ kind: "openapi", path: "api/openapi.yaml" }, { kind: "proto", path: "proto/x.proto" }], kafka: { topics: { "orders.paid": "schemas/paid.avsc" } } })] }),
+    );
   });
 });

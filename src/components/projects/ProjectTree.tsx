@@ -51,7 +51,8 @@ function ProjectNode({ project, collapsed, onToggle }: { project: RecentProject;
     </li>
   );
   return (
-    <li role="treeitem" aria-expanded={!collapsed} aria-label={label} className={project.missing ? "tree-folder tree-error" : "tree-folder"}>
+    // Пропавший проект не раскрывается: aria-expanded только у раскрываемого узла, сам узел серый, а не красный.
+    <li role="treeitem" aria-expanded={project.missing ? undefined : !collapsed} aria-label={label} className={project.missing ? "tree-folder muted" : "tree-folder"}>
       <div className="tree-conn">
         <button type="button" className="tree-caret" aria-label={t("sidebar.folderToggle", { name: label })} onClick={onToggle} disabled={project.missing}>
           {collapsed ? "▸" : "▾"}

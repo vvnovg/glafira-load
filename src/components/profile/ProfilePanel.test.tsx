@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithClient } from "../../test/render";
@@ -227,7 +227,7 @@ describe("ProfilePanel", () => {
     await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
     await waitFor(() => expect(api.profileCompute).toHaveBeenCalledTimes(calls + 1));
     expect(screen.getByText(/Цели профиля nominal/).closest("section")).toHaveAttribute("aria-busy", "true");
-    finish({ profile: "nominal", basis: "avg", targets: [], total: 50, uncovered: [], timeline: [], total_minutes: 70 });
+    await act(async () => finish({ profile: "nominal", basis: "avg", targets: [], total: 50, uncovered: [], timeline: [], total_minutes: 70 }));
     expect(await screen.findByText(/Цели профиля nominal: всего 50.0 RPS/)).toBeInTheDocument();
   });
 });

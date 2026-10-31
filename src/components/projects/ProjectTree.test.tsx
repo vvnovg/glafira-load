@@ -34,6 +34,11 @@ describe("ProjectTree", () => {
     await userEvent.click(screen.getByRole("button", { name: "Orders" }));
     expect(useWorkspace.getState().activeId).toBe("service:/p/orders:orders");
     expect(screen.getByText("Папка не найдена")).toBeInTheDocument();
+    expect(orders).toHaveAttribute("aria-expanded", "true");
+    const gone = screen.getByRole("treeitem", { name: /gone/ });
+    expect(gone).not.toHaveAttribute("aria-expanded");
+    expect(gone).toHaveClass("muted");
+    expect(gone).not.toHaveClass("tree-error");
     // Раскрытие узла только читает манифест: список недавних не переупорядочивается.
     expect(api.projectView).toHaveBeenCalledWith("/p/orders");
     expect(api.projectOpen).not.toHaveBeenCalled();
