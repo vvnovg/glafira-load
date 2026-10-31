@@ -12,13 +12,17 @@ const api = vi.hoisted(() => ({
     { path: "/p/gone", name: null, missing: true },
   ]),
   projectOpen: vi.fn(async (path: string) => ({ path, manifest: { format: 1, name: "Orders platform", services: [{ id: "orders", name: "Orders", path: "../orders", contracts: [] }], environments: [] }, problems: [], readOnly: false, missingServices: [] })),
+  projectView: vi.fn(async (path: string) => ({ path, manifest: { format: 1, name: "Orders platform", services: [{ id: "orders", name: "Orders", path: "../orders", contracts: [] }], environments: [] }, problems: [], readOnly: false, missingServices: [] })),
   projectClose: vi.fn(async () => undefined),
 }));
 vi.mock("../../api/client", () => ({ api, toAppError: (e: unknown) => e }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(async () => "/p/new") }));
 
 describe("ProjectTree", () => {
-  beforeEach(() => useWorkspace.setState({ tabs: [], activeId: null }));
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useWorkspace.setState({ tabs: [], activeId: null });
+  });
 
   it("lists recent projects, expands sections and opens tabs", async () => {
     renderWithClient(<ProjectTree />);
@@ -30,6 +34,9 @@ describe("ProjectTree", () => {
     await userEvent.click(screen.getByRole("button", { name: "Orders" }));
     expect(useWorkspace.getState().activeId).toBe("service:/p/orders:orders");
     expect(screen.getByText("Папка не найдена")).toBeInTheDocument();
+    // Раскрытие узла только читает манифест: список недавних не переупорядочивается.
+    expect(api.projectView).toHaveBeenCalledWith("/p/orders");
+    expect(api.projectOpen).not.toHaveBeenCalled();
   });
 
   it("removes a missing project from the list and closes its tabs", async () => {

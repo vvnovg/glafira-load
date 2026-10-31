@@ -34,7 +34,7 @@ function ProjectNode({ project, collapsed, onToggle }: { project: RecentProject;
   const qc = useQueryClient();
   const open = useWorkspace((s) => s.open);
   const closeForProject = useWorkspace((s) => s.closeForProject);
-  const manifest = useQuery({ queryKey: ["project", project.path], queryFn: () => api.projectOpen(project.path), enabled: !collapsed && !project.missing });
+  const manifest = useQuery({ queryKey: ["project", project.path], queryFn: () => api.projectView(project.path), enabled: !collapsed && !project.missing });
   const remove = useMutation({
     mutationFn: () => api.projectClose(project.path),
     onSuccess: () => {
@@ -104,6 +104,7 @@ export function ProjectTree() {
     },
     onSuccess: (p) => {
       if (!p) return;
+      qc.setQueryData(["project", p.path], p);
       void qc.invalidateQueries({ queryKey: ["projects"] });
       open({ kind: "project", path: p.path });
     },

@@ -10,6 +10,7 @@ const api = vi.hoisted(() => {
   const project = { path: "/p/orders", manifest: { format: 1, name: "Orders", services: [{ id: "orders", name: "Orders", path: "../orders", contracts: [] }], environments: [{ id: "test", kind: "test", http: "https://t" }] }, problems: [], readOnly: false, missingServices: ["orders"] };
   return {
     projectOpen: vi.fn(async () => project),
+    projectView: vi.fn(async () => project),
     projectSave: vi.fn(async (_p: string, manifest: unknown) => ({ ...project, manifest })),
     projectCreate: vi.fn(async (path: string, name: string) => ({ ...project, path, manifest: { ...project.manifest, name, services: [] } })),
     openPath: vi.fn(async () => undefined),
@@ -20,7 +21,10 @@ vi.mock("../../api/client", () => ({ api, toAppError: (e: unknown) => e }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(async () => "/p/created") }));
 
 describe("ProjectPanel", () => {
-  beforeEach(() => useWorkspace.setState({ tabs: [], activeId: null }));
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useWorkspace.setState({ tabs: [], activeId: null });
+  });
 
   it("edits the manifest and saves it", async () => {
     renderWithClient(<ProjectPanel path="/p/orders" />);
@@ -31,6 +35,10 @@ describe("ProjectPanel", () => {
     await userEvent.type(ids[ids.length - 1], "stage");
     await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
     expect(api.projectSave).toHaveBeenCalledWith("/p/orders", expect.objectContaining({ environments: [expect.objectContaining({ id: "test" }), expect.objectContaining({ id: "stage", kind: "dev" })] }));
+    // Данные — из запроса только для чтения; открытие вкладки один раз отмечает проект в недавних.
+    expect(api.projectView).toHaveBeenCalledWith("/p/orders");
+    expect(api.projectOpen).toHaveBeenCalledTimes(1);
+    expect(api.projectOpen).toHaveBeenCalledWith("/p/orders");
   });
 
   it("creates a new project and switches the tab", async () => {

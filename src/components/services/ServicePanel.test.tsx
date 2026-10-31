@@ -29,7 +29,7 @@ const { api, state } = vi.hoisted(() => {
     cancelled: false,
   };
   const api = {
-    projectOpen: vi.fn(async () => state.project),
+    projectView: vi.fn(async () => state.project),
     projectSave: vi.fn(async (_p: string, manifest: unknown) => ({ ...state.project, manifest })),
     serviceDiscoverContracts: vi.fn(async () => [
       { kind: "openapi", path: "api/openapi.yaml", enabled: true },

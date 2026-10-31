@@ -119,7 +119,7 @@ export function RegistryPanel({ path }: { path: string }) {
     () => ({ service: service || undefined, kind: kind || undefined, source: source || undefined, status: status || undefined, query: debounced || undefined }),
     [service, kind, source, status, debounced],
   );
-  const project = useQuery({ queryKey: ["project", path], queryFn: () => api.projectOpen(path) });
+  const project = useQuery({ queryKey: ["project", path], queryFn: () => api.projectView(path) });
   const rows = useQuery({ queryKey: ["registry", path, filter], queryFn: () => api.registryList(path, filter) });
   const scans = useQuery({ queryKey: ["scans", path], queryFn: () => api.registryScans(path) });
   // Снимки идут от новых к старым; по умолчанию сравниваем два последних.

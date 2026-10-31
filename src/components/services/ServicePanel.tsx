@@ -177,7 +177,7 @@ export function ServicePanel({ path, serviceId }: { path: string; serviceId: str
   const { t } = useTranslation();
   const qc = useQueryClient();
   useHelpChapter(tabId({ kind: "service", path, serviceId }), "project");
-  const project = useQuery({ queryKey: ["project", path], queryFn: () => api.projectOpen(path) });
+  const project = useQuery({ queryKey: ["project", path], queryFn: () => api.projectView(path) });
   const service = project.data?.manifest.services.find((s) => s.id === serviceId);
   const missing = project.data?.missingServices.includes(serviceId) ?? false;
   const discovered = useQuery({ queryKey: ["contracts", path, serviceId], queryFn: () => api.serviceDiscoverContracts(path, serviceId), enabled: !!service && !missing });

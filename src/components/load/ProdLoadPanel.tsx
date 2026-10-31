@@ -17,7 +17,7 @@ export function ProdLoadPanel({ path }: { path: string }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   useHelpChapter(tabId({ kind: "prod-load", path }), "prod-load");
-  const project = useQuery({ queryKey: ["project", path], queryFn: () => api.projectOpen(path) });
+  const project = useQuery({ queryKey: ["project", path], queryFn: () => api.projectView(path) });
   const prod = useQuery({ queryKey: ["prodLoad", path], queryFn: () => api.prodLoadGet(path) });
   const rows = useQuery({ queryKey: ["registry", path, { status: "active" }], queryFn: () => api.registryList(path, { status: "active" }) });
   const [prefill, setPrefill] = useState(true);

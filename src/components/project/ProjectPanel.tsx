@@ -138,7 +138,12 @@ function EnvRow({ e, onChange, onRemove }: { e: Environment; onChange: (e: Envir
 function ExistingProject({ path }: { path: string }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ["project", path], queryFn: () => api.projectOpen(path) });
+  const q = useQuery({ queryKey: ["project", path], queryFn: () => api.projectView(path) });
+  // Вкладка проекта — явное открытие: проект поднимается в недавних и становится активным.
+  // Данные вкладка берёт из общего запроса `["project", path]` (только чтение), ошибку покажет он же.
+  useEffect(() => {
+    api.projectOpen(path).catch(() => undefined);
+  }, [path]);
   const [draft, setDraft] = useState<Manifest | null>(null);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
   const [reports, setReports] = useState<ScanReport[]>([]);

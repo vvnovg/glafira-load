@@ -19,7 +19,7 @@ const { api, preview } = vi.hoisted(() => {
     skipped_rows: 2,
   };
   const api = {
-    projectOpen: vi.fn(async () => ({ path: "/p", manifest: { format: 1, name: "orders", services: [], environments: [] }, problems: [], readOnly: false, missingServices: [] })),
+    projectView: vi.fn(async () => ({ path: "/p", manifest: { format: 1, name: "orders", services: [], environments: [] }, problems: [], readOnly: false, missingServices: [] })),
     prodLoadGet: vi.fn(async (): Promise<ProdLoad> => ({ format: 1, source: { ...source, stand: "" }, operations: { "http:o:POST /a": { avg: 1, peak: 2 } } })),
     registryList: vi.fn(async () => [
       { id: "http:o:POST /a", service: "o", kind: "http", name: "a", summary: "", source: "openapi", status: "active", lastVersion: "v", topicGuessed: false },

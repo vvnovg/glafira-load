@@ -27,7 +27,7 @@ const { api, ask, op, twoRows, state } = vi.hoisted(() => {
   ];
   const state = { rows: twoRows as unknown[], readOnly: false };
   const api = {
-    projectOpen: vi.fn(async () => ({ path: "/p", manifest: { format: 1, name: "P", services: [{ id: "orders", name: "", path: "../orders", contracts: [] }], environments: [] }, problems: [], readOnly: state.readOnly, missingServices: [] })),
+    projectView: vi.fn(async () => ({ path: "/p", manifest: { format: 1, name: "P", services: [{ id: "orders", name: "", path: "../orders", contracts: [] }], environments: [] }, problems: [], readOnly: state.readOnly, missingServices: [] })),
     registryList: vi.fn(async () => state.rows),
     registryGet: vi.fn(async () => op),
     registryUpdateManual: vi.fn(async () => op),

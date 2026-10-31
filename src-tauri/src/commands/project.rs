@@ -29,18 +29,31 @@ pub async fn project_create(
     .await
 }
 
-/// YAML манифеста не читается — ошибка `PROJECT_INVALID`; манифест с проблемами проверки
-/// открывается только для чтения (`readOnly`, `problems`).
+/// Чтение проекта без побочных эффектов: YAML манифеста не читается — ошибка `PROJECT_INVALID`;
+/// манифест с проблемами проверки отдаётся только для чтения (`readOnly`, `problems`).
+fn view(path: &str) -> AppResult<Project> {
+    require_absolute(path)?;
+    ProjectDir::open(path)?.view()
+}
+
+/// Явное открытие: как [`view`], плюс проект поднимается в недавних и становится активным.
+fn open(st: &AppState, path: &str) -> AppResult<Project> {
+    let p = view(path)?;
+    remember(st, &p.path)?;
+    Ok(p)
+}
+
+/// Открытие проекта пользователем (список недавних и активный проект меняются).
 #[tauri::command]
 pub async fn project_open(state: State<'_, AppState>, path: String) -> AppResult<Project> {
     let st = state.inner().clone();
-    blocking(move || {
-        require_absolute(&path)?;
-        let p = ProjectDir::open(&path)?.view()?;
-        remember(&st, &p.path)?;
-        Ok(p)
-    })
-    .await
+    blocking(move || open(&st, &path)).await
+}
+
+/// Только чтение манифеста для панелей и дерева: недавние и активный проект не трогаются.
+#[tauri::command]
+pub async fn project_view(path: String) -> AppResult<Project> {
+    blocking(move || view(&path)).await
 }
 
 /// «Убрать из списка»: проект на диске не трогается.
@@ -214,6 +227,38 @@ mod tests {
         assert_eq!(e.code, ErrorCode::ProjectInvalid);
         assert_eq!(e.key, "errors.project.readOnly");
         assert_eq!(std::fs::read_to_string(&manifest_file).unwrap(), before);
+    }
+
+    #[test]
+    fn open_remembers_project_and_view_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = AppState::new(&dir.path().join("data")).unwrap();
+        let a = dir.path().join("a");
+        let b = dir.path().join("b");
+        create(a.to_str().unwrap(), "a").unwrap();
+        create(b.to_str().unwrap(), "b").unwrap();
+
+        let pa = open(&st, a.to_str().unwrap()).unwrap();
+        let pb = open(&st, b.to_str().unwrap()).unwrap();
+        assert_eq!(pa.manifest.name, "a");
+        let before = st.settings.projects();
+        assert_eq!(before.recent, vec![pb.path.clone(), pa.path.clone()]);
+        assert_eq!(before.active.as_deref(), Some(pb.path.as_str()));
+
+        let v = view(a.to_str().unwrap()).unwrap();
+        assert_eq!(v.manifest.name, "a");
+        assert_eq!(v.path, pa.path);
+        let after = st.settings.projects();
+        assert_eq!(after.recent, before.recent, "порядок недавних не меняется");
+        assert_eq!(after.active, before.active, "активный проект не меняется");
+
+        // Тот же контроль пути, что у `project_open`.
+        let e = view("relative/path").unwrap_err();
+        assert_eq!(e.code, open(&st, "relative/path").unwrap_err().code);
+        assert_eq!(st.settings.projects().recent, before.recent);
+        // Несуществующий проект — ошибка, список не меняется.
+        assert!(view(dir.path().join("gone").to_str().unwrap()).is_err());
+        assert_eq!(st.settings.projects().recent, before.recent);
     }
 
     #[test]

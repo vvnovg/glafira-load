@@ -47,6 +47,7 @@ pub fn run() {
             commands::settings::get_policy_status,
             commands::project::project_create,
             commands::project::project_open,
+            commands::project::project_view,
             commands::project::project_close,
             commands::project::project_save,
             commands::project::project_recent,

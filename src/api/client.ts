@@ -53,7 +53,10 @@ export const api = {
   checkUpdate: () => call<UpdateCheck>("check_update"),
   installUpdate: () => call<void>("install_update"),
   projectCreate: (path: string, name: string) => call<Project>("project_create", { path, name }),
+  /** Явное открытие: проект поднимается в недавних и становится активным. */
   projectOpen: (path: string) => call<Project>("project_open", { path }),
+  /** Только чтение проекта (дерево, панели): недавние и активный проект не меняются. */
+  projectView: (path: string) => call<Project>("project_view", { path }),
   projectClose: (path: string) => call<void>("project_close", { path }),
   projectSave: (path: string, manifest: Manifest) => call<Project>("project_save", { path, manifest }),
   projectRecent: () => call<RecentProject[]>("project_recent"),
