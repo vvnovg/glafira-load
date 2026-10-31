@@ -1,4 +1,4 @@
-//! Папка проекта НТ: манифест и файлы этапа L1 (спека L1 §3). Все записи — через `atomic_write`.
+//! Папка проекта НТ: манифест и файлы этапа L1 (спека L1 §3). Все записи — через `atomic_write_shared`.
 
 use std::path::{Path, PathBuf};
 
@@ -10,8 +10,9 @@ use glafira_load_model::{ModelError, from_yaml, to_yaml};
 use serde::Serialize;
 
 use crate::error::{AppError, AppResult, ErrorCode};
+use crate::project::paths::canonical;
 use crate::project::paths::{inside, resolve};
-use crate::storage::fs::atomic_write;
+use crate::storage::fs::atomic_write_shared;
 
 /// Проект для фронтенда: манифест, проблемы проверки и сервисы без папки клона.
 #[derive(Debug, Clone, Serialize)]
@@ -37,19 +38,23 @@ pub struct RecentProject {
 /// Папка проекта: чтение и атомарная запись файлов только внутри неё.
 #[derive(Debug)]
 pub struct ProjectDir {
+    /// Канонический корень (`dunce`): с ним сравнивают результаты `paths::inside`.
     root: PathBuf,
 }
 
 /// Файл проекта есть, но YAML не разбирается: `PROJECT_INVALID`, строка — в `details`.
 fn invalid(file: &str, e: ModelError) -> AppError {
-    app_err!(
+    let err = app_err!(
         ErrorCode::ProjectInvalid,
         "errors.project.invalidFile",
         "{{file}}: {{error}}",
         file = file,
         error = e.message
-    )
-    .with_details(e.line.map(|l| format!("line {l}")).unwrap_or_default())
+    );
+    match e.line {
+        Some(l) => err.with_details(format!("line {l}")),
+        None => err,
+    }
 }
 
 fn no_manifest(path: &impl std::fmt::Display) -> AppError {
@@ -65,11 +70,13 @@ fn no_manifest(path: &impl std::fmt::Display) -> AppError {
 impl ProjectDir {
     /// Папка с манифестом; без манифеста — `NOT_FOUND`.
     pub fn open(path: &str) -> AppResult<Self> {
-        let root = PathBuf::from(path);
-        if !root.join(MANIFEST_FILE).is_file() {
+        let raw = PathBuf::from(path);
+        if !raw.join(MANIFEST_FILE).is_file() {
             return Err(no_manifest(&path));
         }
-        Ok(Self { root })
+        Ok(Self {
+            root: canonical(&raw)?,
+        })
     }
 
     pub fn root(&self) -> &Path {
@@ -90,10 +97,11 @@ impl ProjectDir {
         }
     }
 
-    /// Атомарная запись; путь вне проекта — `PATH_OUTSIDE_PROJECT`.
+    /// Атомарная запись с обычными правами (файлы проекта коммитят); путь вне проекта —
+    /// `PATH_OUTSIDE_PROJECT`.
     pub fn write_bytes(&self, rel: &str, bytes: &[u8]) -> AppResult<()> {
         let p = inside(&self.root, &self.file(rel))?;
-        atomic_write(&p, bytes)
+        atomic_write_shared(&p, bytes)
     }
 
     pub fn write_text(&self, rel: &str, text: &str) -> AppResult<()> {
@@ -206,16 +214,18 @@ pub fn create(path: &str, name: &str) -> AppResult<Project> {
     }
     std::fs::create_dir_all(root.join("registry/scans"))?;
     std::fs::create_dir_all(root.join("load/imports"))?;
-    atomic_write(
+    // Дальше всё идёт от канонического корня (как в `ProjectDir::open`).
+    let root = canonical(&root)?;
+    atomic_write_shared(
         &root.join(MANIFEST_FILE),
         to_yaml(&Manifest::new(name.trim())).as_bytes(),
     )?;
-    atomic_write(
+    atomic_write_shared(
         &root.join(REGISTRY_FILE),
         to_yaml(&Registry::default()).as_bytes(),
     )?;
-    atomic_write(&root.join(".gitignore"), b"runs/\n")?;
-    ProjectDir::open(path)?.view()
+    atomic_write_shared(&root.join(".gitignore"), b"runs/\n")?;
+    ProjectDir::open(&root.to_string_lossy())?.view()
 }
 
 #[cfg(test)]
@@ -307,7 +317,7 @@ mod tests {
         assert!(v.missing_services.is_empty(), "клон на месте");
         assert_eq!(
             d.service_root(&m, "Bad Id").unwrap(),
-            path.join("../clone"),
+            d.root().join("../clone"),
             "клон может лежать вне папки проекта"
         );
         let json = serde_json::to_value(&v).unwrap();
@@ -335,5 +345,47 @@ mod tests {
         assert!(d.read_text("load/prod-load.yaml").unwrap().is_none());
         d.write_bytes("load/imports/new/x.xlsx", b"PK").unwrap();
         assert!(path.join("load/imports/new/x.xlsx").is_file());
+    }
+
+    #[test]
+    fn root_is_canonical_and_equal_for_trailing_slash() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p");
+        let p = create(path.to_str().unwrap(), "x").unwrap();
+        let canon = dunce::canonicalize(&path).unwrap();
+        assert_eq!(p.path, canon.to_string_lossy());
+        let with_slash = format!("{}/", path.display());
+        let d = ProjectDir::open(&with_slash).unwrap();
+        assert_eq!(d.root(), canon);
+        assert_eq!(
+            d.view().unwrap().path,
+            p.path,
+            "один путь для списка недавних"
+        );
+        // Путь внутри проекта сохраняется относительным.
+        let inner = inside(d.root(), &d.file("registry/operations.yaml")).unwrap();
+        assert_eq!(
+            crate::project::paths::relative(d.root(), &inner),
+            "registry/operations.yaml"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn project_files_are_not_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p");
+        create(path.to_str().unwrap(), "x").unwrap();
+        let d = ProjectDir::open(path.to_str().unwrap()).unwrap();
+        d.write_text("load/profile.yaml", "format: 1\n").unwrap();
+        for f in [MANIFEST_FILE, "load/profile.yaml", ".gitignore"] {
+            let mode = std::fs::metadata(path.join(f))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_ne!(mode, 0o600, "{f}");
+        }
     }
 }

@@ -2,7 +2,7 @@
 
 use std::ffi::OsStr;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
@@ -36,6 +36,8 @@ async fn run(git: &OsStr, repo: &Path, args: &[&str], timeout: Duration) -> Resu
         .arg(repo)
         .args(args)
         .stdin(std::process::Stdio::null())
+        // `--dirty` не должен брать `index.lock`: пока открыт проект, пользователь работает с git.
+        .env("GIT_OPTIONAL_LOCKS", "0")
         // Таймаут роняет future — зависший git не остаётся висеть.
         .kill_on_drop(true);
     // Без мелькающего окна консоли при запуске из GUI на Windows (CREATE_NO_WINDOW).
@@ -51,7 +53,9 @@ async fn run(git: &OsStr, repo: &Path, args: &[&str], timeout: Duration) -> Resu
     }
 }
 
+/// `timeout` — общий бюджет обеих команд: один дедлайн, а не отдельный таймаут на каждую.
 async fn describe_timeout(git: &OsStr, repo: &Path, timeout: Duration) -> GitVersion {
+    let deadline = Instant::now() + timeout;
     match run(
         git,
         repo,
@@ -61,7 +65,8 @@ async fn describe_timeout(git: &OsStr, repo: &Path, timeout: Duration) -> GitVer
     .await
     {
         Ok(version) => {
-            let commit = run(git, repo, &["rev-parse", "HEAD"], timeout)
+            let left = deadline.saturating_duration_since(Instant::now());
+            let commit = run(git, repo, &["rev-parse", "HEAD"], left)
                 .await
                 .unwrap_or_default();
             GitVersion {

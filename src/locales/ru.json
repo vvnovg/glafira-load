@@ -55,7 +55,9 @@
       "noService": "Сервиса {{id}} нет в манифесте",
       "serviceDirMissing": "Папка сервиса {{id}} не найдена: {{path}}",
       "dirNotEmpty": "Папка {{path}} не пуста",
-      "invalidManifest": "В манифесте проблем: {{count}}"
+      "invalidManifest": "В манифесте проблем: {{count}}",
+      "pathNotAbsolute": "Путь проекта должен быть абсолютным: {{path}}",
+      "readOnly": "Проект только для чтения, пока манифест не исправлен: {{path}}"
     }
   },
   "settings": {

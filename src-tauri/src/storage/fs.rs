@@ -25,11 +25,16 @@ fn tmp_path(path: &Path) -> PathBuf {
 /// подставленные значения `{{env}}` и заголовков. rename сохраняет права временного файла.
 /// Только новый (`create_new`, `O_EXCL`): файл или symlink, подложенный заранее под этим именем,
 /// не открывается, и запись не уходит по чужой ссылке.
-fn create_private(path: &Path) -> std::io::Result<File> {
+/// Новый файл (`O_EXCL`); `private` — только владельцу (0600), иначе права по умолчанию (umask).
+fn create_new(path: &Path, private: bool) -> std::io::Result<File> {
     let mut opts = fs::OpenOptions::new();
     opts.write(true).create_new(true);
     #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    if private {
+        std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    }
+    #[cfg(not(unix))]
+    let _ = private;
     opts.open(path)
 }
 
@@ -38,10 +43,13 @@ const TMP_ATTEMPTS: usize = 100;
 
 /// Временный файл: первое свободное имя из `next` (`tmp_path`). Занятое (чужой файл или symlink)
 /// пропускается — следующее имя с новым номером.
-fn create_tmp(mut next: impl FnMut() -> PathBuf) -> std::io::Result<(PathBuf, File)> {
+fn create_tmp(
+    private: bool,
+    mut next: impl FnMut() -> PathBuf,
+) -> std::io::Result<(PathBuf, File)> {
     for _ in 0..TMP_ATTEMPTS {
         let tmp = next();
-        match create_private(&tmp) {
+        match create_new(&tmp, private) {
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             r => return r.map(|f| (tmp, f)),
         }
@@ -53,6 +61,14 @@ fn create_tmp(mut next: impl FnMut() -> PathBuf) -> std::io::Result<(PathBuf, Fi
 /// При сбое на любом шаге исходный файл остаётся нетронутым.
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> AppResult<()> {
     let mut f = AtomicFile::create(path)?;
+    f.write_all(bytes)?;
+    f.commit()
+}
+
+/// То же, но файл с правами по умолчанию (umask), а не 0600: для файлов проекта, которые
+/// коммитят в git и делят с командой.
+pub fn atomic_write_shared(path: &Path, bytes: &[u8]) -> AppResult<()> {
+    let mut f = AtomicFile::open(path, false)?;
     f.write_all(bytes)?;
     f.commit()
 }
@@ -78,8 +94,12 @@ pub struct AtomicFile {
 
 impl AtomicFile {
     pub fn create(path: &Path) -> AppResult<Self> {
+        Self::open(path, true)
+    }
+
+    fn open(path: &Path, private: bool) -> AppResult<Self> {
         let (tmp, file) = fs::create_dir_all(parent(path))
-            .and_then(|_| create_tmp(|| tmp_path(path)))
+            .and_then(|_| create_tmp(private, || tmp_path(path)))
             .map_err(|e| write_failed(path, e))?;
         Ok(Self {
             path: path.to_path_buf(),
@@ -242,6 +262,21 @@ mod tests {
         assert_eq!(mode, 0o600, "заменённый файл тоже 0600");
     }
 
+    /// Файлы проекта делят через git: права по умолчанию (umask), а не 0600.
+    #[cfg(unix)]
+    #[test]
+    fn shared_files_are_not_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("p.yaml");
+        atomic_write_shared(&p, b"1").unwrap();
+        atomic_write_shared(&p, b"2").unwrap();
+        assert_eq!(std::fs::read(&p).unwrap(), b"2");
+        let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
+        assert_ne!(mode, 0o600, "общий файл не owner-only (при обычной umask)");
+        assert!(leftover_tmps(dir.path()).is_empty());
+    }
+
     /// Под именем временного файла заранее лежит symlink на чужой файл: он не открывается и не
     /// обрезается, запись идёт под следующим именем, а подложенное остаётся как было.
     #[cfg(unix)]
@@ -256,7 +291,7 @@ mod tests {
         );
         std::os::unix::fs::symlink(&victim, &planted).unwrap();
         let mut names = [planted.clone(), free.clone()].into_iter();
-        let (tmp, mut f) = create_tmp(|| names.next().unwrap()).unwrap();
+        let (tmp, mut f) = create_tmp(true, || names.next().unwrap()).unwrap();
         assert_eq!(tmp, free);
         f.write_all(b"secret").unwrap();
         drop(f);
@@ -268,7 +303,7 @@ mod tests {
         assert!(std::fs::symlink_metadata(&planted).unwrap().is_symlink());
         assert_eq!(std::fs::read(&free).unwrap(), b"secret");
         // Все имена заняты — ошибка, а не запись по ссылке.
-        let e = create_tmp(|| planted.clone()).unwrap_err();
+        let e = create_tmp(true, || planted.clone()).unwrap_err();
         assert_eq!(e.kind(), std::io::ErrorKind::AlreadyExists);
         assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
     }

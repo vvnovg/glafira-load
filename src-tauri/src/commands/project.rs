@@ -1,12 +1,12 @@
 //! Команды проекта: создание, открытие, сохранение манифеста, недавние проекты, открытие пути.
 
-use glafira_load_model::project::{Manifest, validate};
+use glafira_load_model::project::{MANIFEST_FILE, Manifest, validate};
 use tauri::State;
 
 use super::blocking;
 use crate::error::{AppError, AppResult, ErrorCode};
 use crate::project::manifest::{Project, ProjectDir, RecentProject, create};
-use crate::project::paths::{inside, resolve};
+use crate::project::paths::{inside, require_absolute, resolve};
 use crate::state::AppState;
 
 fn remember(st: &AppState, path: &str) -> AppResult<()> {
@@ -21,6 +21,7 @@ pub async fn project_create(
 ) -> AppResult<Project> {
     let st = state.inner().clone();
     blocking(move || {
+        require_absolute(&path)?;
         let p = create(&path, &name)?;
         remember(&st, &p.path)?;
         Ok(p)
@@ -34,6 +35,7 @@ pub async fn project_create(
 pub async fn project_open(state: State<'_, AppState>, path: String) -> AppResult<Project> {
     let st = state.inner().clone();
     blocking(move || {
+        require_absolute(&path)?;
         let p = ProjectDir::open(&path)?.view()?;
         remember(&st, &p.path)?;
         Ok(p)
@@ -63,6 +65,16 @@ pub async fn project_save(path: String, manifest: Manifest) -> AppResult<Project
             .with_details(serde_json::to_string(&problems).unwrap_or_default()));
         }
         let d = ProjectDir::open(&path)?;
+        // Манифест на диске не читается или не проходит проверки — не затираем его.
+        let on_disk = d.manifest()?;
+        if !validate(&on_disk).is_empty() {
+            return Err(app_err!(
+                ErrorCode::ProjectInvalid,
+                "errors.project.readOnly",
+                "Project is read-only until its manifest is fixed: {{path}}",
+                path = d.root().join(MANIFEST_FILE).display()
+            ));
+        }
         d.save_manifest(&manifest)?;
         d.view()
     })
@@ -170,6 +182,38 @@ mod tests {
             .manifest()
             .unwrap();
         assert_eq!(back.name, "renamed", "сохранено на диск");
+    }
+
+    #[tokio::test]
+    async fn save_does_not_clobber_unreadable_or_read_only_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p");
+        let ps = path.to_string_lossy().into_owned();
+        create(&ps, "x").unwrap();
+        let manifest_file = path.join(MANIFEST_FILE);
+
+        // YAML не читается.
+        std::fs::write(&manifest_file, "name: [\n").unwrap();
+        let e = project_save(ps.clone(), Manifest::new("new"))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::ProjectInvalid);
+        assert_eq!(e.key, "errors.project.invalidFile");
+        assert_eq!(
+            std::fs::read_to_string(&manifest_file).unwrap(),
+            "name: [\n"
+        );
+
+        // YAML читается, но не проходит проверки: проект только для чтения.
+        let d = ProjectDir::open(&ps).unwrap();
+        let mut bad = Manifest::new("x");
+        bad.services.push(service("Bad Id", "."));
+        d.save_manifest(&bad).unwrap();
+        let before = std::fs::read_to_string(&manifest_file).unwrap();
+        let e = project_save(ps, Manifest::new("new")).await.unwrap_err();
+        assert_eq!(e.code, ErrorCode::ProjectInvalid);
+        assert_eq!(e.key, "errors.project.readOnly");
+        assert_eq!(std::fs::read_to_string(&manifest_file).unwrap(), before);
     }
 
     #[test]

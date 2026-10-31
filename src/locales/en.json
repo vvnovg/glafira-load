@@ -55,7 +55,9 @@
       "noService": "Service {{id}} is not in the manifest",
       "serviceDirMissing": "Folder of service {{id}} not found: {{path}}",
       "dirNotEmpty": "Folder {{path}} is not empty",
-      "invalidManifest": "The manifest has {{count}} problem(s)"
+      "invalidManifest": "The manifest has {{count}} problem(s)",
+      "pathNotAbsolute": "Project path must be absolute: {{path}}",
+      "readOnly": "Project is read-only until its manifest is fixed: {{path}}"
     }
   },
   "settings": {

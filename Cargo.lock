@@ -1463,6 +1463,7 @@ dependencies = [
 name = "glafira-load-testing"
 version = "0.1.0"
 dependencies = [
+ "dunce",
  "glafira-load-contracts",
  "glafira-load-model",
  "glafira-load-xlsx",
