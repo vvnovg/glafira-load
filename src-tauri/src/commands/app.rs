@@ -487,6 +487,9 @@ mod tests {
             up["endpoints"][0],
             "https://github.com/vvnovg/glafira-load-releases/releases/latest/download/latest.json"
         );
-        assert_eq!(conf["bundle"]["createUpdaterArtifacts"], true);
+        // Артефакты updater требуют ключа подписи: пока в конфиге заглушка, они выключены
+        // (включаются в L7 вместе с настоящим ключом).
+        let placeholder = up["pubkey"] == PUBKEY_PLACEHOLDER;
+        assert_eq!(conf["bundle"]["createUpdaterArtifacts"], !placeholder);
     }
 }
