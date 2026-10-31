@@ -47,4 +47,10 @@ ignore = [
   { id = "RUSTSEC-2026-0370", reason = "zvariant 5 через zbus 5 ← tauri-plugin-opener; плагин ещё не перешёл на zbus 6" },
   { id = "RUSTSEC-2026-0371", reason = "zbus_names 4 через zbus 5 ← tauri-plugin-opener; плагин ещё не перешёл на zbus 6" },
   { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 5 через zvariant ← zbus 5 ← tauri-plugin-opener; плагин ещё не перешёл на zbus 6" },
+  # unsafe-libyaml 0.2.11 ← serde_yaml_ng 0.10 — YAML проекта НТ (манифест, реестр, нагрузка, профиль) в крейтах
+  # glafira-load-model и glafira-load-contracts. Репозиторий архивирован, безопасной версии нет; уязвимостей
+  # не заявлено. Переход на YAML-парсер на безопасном Rust (serde-saphyr) — отдельная задача: формат файлов
+  # проекта и порядок ключей должны остаться байт в байт.
+  # https://rustsec.org/advisories/RUSTSEC-2024-0449
+  { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml через serde_yaml_ng — YAML файлов проекта; замена парсера запланирована отдельно" },
 ]
