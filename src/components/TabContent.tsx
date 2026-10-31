@@ -4,6 +4,7 @@ import type { Tab } from "../state/workspace";
 import { AboutPanel } from "./about/AboutPanel";
 import { ChunkBoundary } from "./common/ChunkBoundary";
 import { ProjectPanel } from "./project/ProjectPanel";
+import { ServicePanel } from "./services/ServicePanel";
 import { SettingsPanel } from "./settings/SettingsPanel";
 
 // Справка (react-markdown и главы) грузится отдельным чанком при первом открытии.
@@ -31,6 +32,8 @@ export function TabContent({ tab }: { tab: Tab }) {
       return <SettingsPanel />;
     case "project":
       return <ProjectPanel path={tab.path} />;
+    case "service":
+      return <ServicePanel path={tab.path} serviceId={tab.serviceId} />;
     default:
       // Остальные экраны проекта появляются в Tasks 16–19.
       return <p className="empty">{t("common.loading")}</p>;

@@ -144,6 +144,10 @@
       "folder": "An empty folder inside your git repository: the project is a set of text files that you commit.",
       "services": "A service is a local git clone of the system under test; its contracts are found automatically or listed on the service tab.",
       "environments": "Addresses of your stands without passwords; secrets come with the runner in stage L2."
+    },
+    "service": {
+      "contracts": "OpenAPI/Swagger, Protobuf, AsyncAPI, Avro and JSON Schema, Flyway/Liquibase migrations, Spring controllers. Each file is parsed on its own: an error in one does not stop the rest.",
+      "kafka": "Topic to schema file (relative to the service folder). Direction is optional: by default it is taken from the AsyncAPI operation or the Spring annotation."
     }
   },
   "sidebar": {
@@ -216,5 +220,42 @@
       "bad_environment_id": "Bad environment ID “{{id}}”",
       "duplicate_environment_id": "Duplicate environment ID “{{id}}”"
     }
+  },
+  "service": {
+    "scan": "Scan",
+    "contracts": "Contracts",
+    "noContracts": "No contracts found: add openapi/proto/asyncapi/avsc/sql files or Spring sources to the clone",
+    "autoFound": "Found automatically; switching one off writes the list into the manifest",
+    "openFile": "Open file",
+    "gitVersion": "Version {{version}}",
+    "gitUnavailable": "Git version unavailable ({{error}}): operations are recorded as unversioned",
+    "cancelled": "Scan cancelled: nothing was written",
+    "counts": "Contracts: {{contracts}}, operations found {{found}}, tables {{tables}}",
+    "summary": "New {{added}}, changed {{changed}}, removed {{removed}}, restored {{restored}}, unchanged {{unchanged}}",
+    "errors": "Errors",
+    "warnings": "Warnings",
+    "notInManifest": "Service {{id}} is not in the manifest",
+    "kind": "Kind of {{path}}",
+    "path": "Path of {{path}}",
+    "include": "Include paths of {{path}}",
+    "includePlaceholder": "include: dirs, comma-separated",
+    "removeContract": "Remove contract {{path}}",
+    "newKind": "New contract kind",
+    "newPath": "New contract path (relative to the service folder)",
+    "chooseFile": "Choose file…",
+    "addContract": "Add contract",
+    "discover": "Find contracts",
+    "kafkaTopics": "Kafka topics",
+    "noTopics": "No topic mapping: topics are taken from AsyncAPI and Spring sources",
+    "topicSchema": "Schema of topic {{topic}}",
+    "topicDirection": "Direction of topic {{topic}}",
+    "directionAuto": "direction: auto",
+    "removeTopic": "Remove topic {{topic}}",
+    "newTopic": "New topic",
+    "newTopicSchema": "Schema file of the new topic",
+    "newTopicDirection": "Direction of the new topic",
+    "addTopic": "Add topic",
+    "openScan": "Open scan snapshot",
+    "openRegistry": "Open registry"
   }
 }

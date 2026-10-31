@@ -144,6 +144,10 @@
       "folder": "Пустая папка внутри вашего git-репозитория: проект — набор текстовых файлов, которые вы коммитите.",
       "services": "Сервис — локальный клон git тестируемой системы; контракты находятся автоматически или перечисляются на вкладке сервиса.",
       "environments": "Адреса стендов без паролей; секреты появятся вместе с раннером на этапе L2."
+    },
+    "service": {
+      "contracts": "OpenAPI/Swagger, Protobuf, AsyncAPI, Avro и JSON Schema, миграции Flyway/Liquibase, контроллеры Spring. Каждый файл разбирается отдельно: ошибка в одном не останавливает остальные.",
+      "kafka": "Топик → файл схемы (относительно папки сервиса). Направление необязательно: по умолчанию берётся из операции AsyncAPI или аннотации Spring."
     }
   },
   "sidebar": {
@@ -216,5 +220,42 @@
       "bad_environment_id": "Плохой ID стенда «{{id}}»",
       "duplicate_environment_id": "Повтор ID стенда «{{id}}»"
     }
+  },
+  "service": {
+    "scan": "Разобрать",
+    "contracts": "Контракты",
+    "noContracts": "Контракты не найдены: добавьте в клон файлы openapi/proto/asyncapi/avsc/sql или исходники Spring",
+    "autoFound": "Найдены автоматически; выключение любого запишет список в манифест",
+    "openFile": "Открыть файл",
+    "gitVersion": "Версия {{version}}",
+    "gitUnavailable": "Версия git недоступна ({{error}}): операции записаны как unversioned",
+    "cancelled": "Разбор отменён: ничего не записано",
+    "counts": "Контрактов: {{contracts}}, найдено {{found}} операций, таблиц {{tables}}",
+    "summary": "Новых {{added}}, изменённых {{changed}}, удалённых {{removed}}, вернувшихся {{restored}}, без изменений {{unchanged}}",
+    "errors": "Ошибки",
+    "warnings": "Предупреждения",
+    "notInManifest": "Сервиса {{id}} нет в манифесте",
+    "kind": "Вид контракта {{path}}",
+    "path": "Путь контракта {{path}}",
+    "include": "Папки include контракта {{path}}",
+    "includePlaceholder": "include: папки через запятую",
+    "removeContract": "Убрать контракт {{path}}",
+    "newKind": "Вид нового контракта",
+    "newPath": "Путь нового контракта (относительно папки сервиса)",
+    "chooseFile": "Выбрать файл…",
+    "addContract": "Добавить контракт",
+    "discover": "Найти контракты",
+    "kafkaTopics": "Топики Kafka",
+    "noTopics": "Соответствий нет: топики берутся из AsyncAPI и исходников Spring",
+    "topicSchema": "Схема топика {{topic}}",
+    "topicDirection": "Направление топика {{topic}}",
+    "directionAuto": "направление: авто",
+    "removeTopic": "Убрать топик {{topic}}",
+    "newTopic": "Новый топик",
+    "newTopicSchema": "Файл схемы нового топика",
+    "newTopicDirection": "Направление нового топика",
+    "addTopic": "Добавить топик",
+    "openScan": "Открыть снимок разбора",
+    "openRegistry": "Открыть реестр"
   }
 }
