@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog">
+  <changeSet id="1" author="demo">
+    <createTable tableName="invoices">
+      <column name="id" type="bigint"><constraints primaryKey="true" nullable="false"/></column>
+      <column name="amount" type="decimal(12,2)"><constraints nullable="false"/></column>
+      <column name="note" type="varchar(255)"/>
+    </createTable>
+  </changeSet>
+  <changeSet id="2" author="demo">
+    <addColumn tableName="invoices">
+      <column name="paid_at" type="timestamp"/>
+    </addColumn>
+    <sqlFile path="002.sql" relativeToChangelogFile="true"/>
+  </changeSet>
+  <include file="other.xml" relativeToChangelogFile="true"/>
+</databaseChangeLog>
