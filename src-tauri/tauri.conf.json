@@ -1,0 +1,61 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Glafira for Load Testing",
+  "mainBinaryName": "glafira-load-testing",
+  "version": "0.1.0",
+  "identifier": "io.github.vvnovg.glafira.load",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1450",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Glafira for Load Testing",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 900,
+        "minHeight": 600,
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg", "msi", "deb", "rpm", "appimage"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "createUpdaterArtifacts": true,
+    "publisher": "Glafira for Load Testing",
+    "category": "DeveloperTool",
+    "shortDescription": "Glafira for Load Testing — desktop tool for preparing and maintaining load tests",
+    "copyright": "© 2026 Viacheslav Novgorodtsev",
+    "linux": {
+      "deb": { "depends": ["libsecret-1-0"] },
+      "rpm": { "depends": ["libsecret"] }
+    },
+    "macOS": { "minimumSystemVersion": "11.0" },
+    "windows": {
+      "wix": {
+        "upgradeCode": "bea8bcc7-a3ae-4fe9-a12e-e1c287fef30d",
+        "language": ["en-US"]
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "REPLACE_WITH_UPDATER_PUBKEY",
+      "endpoints": ["https://github.com/vvnovg/glafira-load-releases/releases/latest/download/latest.json"]
+    }
+  }
+}
