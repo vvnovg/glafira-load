@@ -1,5 +1,7 @@
 pub mod app;
 pub mod project;
+pub mod registry;
+pub mod scan;
 pub mod settings;
 
 use crate::error::{AppResult, ErrorCode};

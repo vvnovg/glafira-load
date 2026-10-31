@@ -5,7 +5,9 @@ use sqlparser::ast::{AlterTableOperation, ColumnOption, ObjectType, Statement};
 use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect, PostgreSqlDialect};
 use sqlparser::parser::Parser;
 
-use crate::{Column, ContractInput, ParseError, ParseOptions, ParseResult, Table};
+use crate::{
+    Column, ContractInput, ParseError, ParseOptions, ParseResult, Table, dir_of, join_path,
+};
 
 /// Символ, который может входить в идентификатор (для распознавания `$tag$`).
 fn is_ident_char(c: char) -> bool {
@@ -419,14 +421,28 @@ fn parse_liquibase_xml(text: &str, path: &str, out: &mut ParseResult) -> Result<
     Ok(())
 }
 
-pub fn parse(input: &ContractInput, _opts: &ParseOptions) -> Result<ParseResult, ParseError> {
+pub fn parse(input: &ContractInput, opts: &ParseOptions) -> Result<ParseResult, ParseError> {
+    parse_onto(input, opts, Vec::new())
+}
+
+/// Как `parse`, но изменения применяются к таблицам предыдущих миграций (`base`): так
+/// `ALTER`/`DROP` в поздней миграции видят таблицы, созданные ранними. Результат — состояние
+/// таблиц после этого файла.
+pub fn parse_onto(
+    input: &ContractInput,
+    _opts: &ParseOptions,
+    base: Vec<Table>,
+) -> Result<ParseResult, ParseError> {
     let text = std::str::from_utf8(input.bytes).map_err(|e| ParseError {
         message: format!("not UTF-8: {e}"),
         line: None,
     })?;
     // BOM перед первым выражением мешает и SQL-парсеру, и XML.
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let mut out = ParseResult::default();
+    let mut out = ParseResult {
+        tables: base,
+        ..ParseResult::default()
+    };
     let lower = input.path.to_ascii_lowercase();
     if lower.ends_with(".xml") {
         parse_liquibase_xml(text, input.path, &mut out)?;
@@ -440,6 +456,56 @@ pub fn parse(input: &ContractInput, _opts: &ParseOptions) -> Result<ParseResult,
         parse_sql_text(text, input.path, &mut out);
     }
     Ok(out)
+}
+
+/// Ссылка Liquibase-changelog на другие файлы миграций.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiquibaseInclude {
+    /// Путь относительно клона, если задан `relativeToChangelogFile="true"`; иначе — как в файле
+    /// (от classpath, вызывающий сопоставляет его с концом пути контракта).
+    pub path: String,
+    pub relative: bool,
+    /// `includeAll`: все файлы каталога по алфавиту.
+    pub dir: bool,
+}
+
+/// `include`, `includeAll` и `sqlFile` changelog-файла в порядке документа (порядок применения
+/// миграций). Файл не XML или не разбирается — пусто: ошибку покажет сам разбор файла.
+pub fn liquibase_includes(path: &str, bytes: &[u8]) -> Vec<LiquibaseInclude> {
+    if !path.to_ascii_lowercase().ends_with(".xml") {
+        return vec![];
+    }
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return vec![];
+    };
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let Ok(doc) = roxmltree::Document::parse(text) else {
+        return vec![];
+    };
+    doc.descendants()
+        .filter(|n| n.is_element())
+        .filter_map(|n| {
+            let (attr, dir) = match n.tag_name().name() {
+                "include" => ("file", false),
+                "includeAll" => ("path", true),
+                "sqlFile" => ("path", false),
+                _ => return None,
+            };
+            let target = n.attribute(attr).filter(|t| !t.trim().is_empty())?;
+            let target = target.trim().replace('\\', "/");
+            let relative = n.attribute("relativeToChangelogFile") == Some("true");
+            let path = if relative {
+                join_path(dir_of(path), &target)
+            } else {
+                join_path("", target.trim_start_matches("classpath:"))
+            };
+            Some(LiquibaseInclude {
+                path,
+                relative,
+                dir,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -532,6 +598,60 @@ mod tests {
         assert_eq!(out.tables[0].columns.len(), 3);
         let out = run("db/changelog/x.yaml", "databaseChangeLog: []");
         assert!(out.tables.is_empty() && out.warnings[0].message.contains("not supported"));
+    }
+
+    #[test]
+    fn later_migrations_apply_onto_earlier_tables() {
+        let read = |_: &str| None;
+        let v1 = run("db/migration/V1__init.sql", V1);
+        let out = parse_onto(
+            &ContractInput {
+                path: "db/migration/V2__add_column.sql",
+                bytes: V2.as_bytes(),
+                read: &read,
+            },
+            &ParseOptions::default(),
+            v1.tables,
+        )
+        .unwrap();
+        let orders = out.tables.iter().find(|t| t.name == "orders").unwrap();
+        let names: Vec<&str> = orders.columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["id", "status", "created_at", "note"],
+            "total удалён, note добавлен"
+        );
+        assert!(out.tables.iter().any(|t| t.name == "audit_log"));
+    }
+
+    #[test]
+    fn liquibase_includes_in_document_order() {
+        let inc = liquibase_includes("db/changelog/changelog.xml", XML.as_bytes());
+        assert_eq!(
+            inc,
+            [
+                LiquibaseInclude {
+                    path: "db/changelog/002.sql".into(),
+                    relative: true,
+                    dir: false
+                },
+                LiquibaseInclude {
+                    path: "db/changelog/other.xml".into(),
+                    relative: true,
+                    dir: false
+                },
+            ]
+        );
+        let xml = r#"<databaseChangeLog><includeAll path="db/changes/"/><include file="classpath:db/x.xml"/></databaseChangeLog>"#;
+        let inc = liquibase_includes("src/main/resources/db/master.xml", xml.as_bytes());
+        assert_eq!(
+            inc.iter()
+                .map(|i| (i.path.as_str(), i.relative, i.dir))
+                .collect::<Vec<_>>(),
+            [("db/changes", false, true), ("db/x.xml", false, false)]
+        );
+        assert!(liquibase_includes("a.sql", b"x").is_empty());
+        assert!(liquibase_includes("a.xml", b"<broken").is_empty());
     }
 
     #[test]

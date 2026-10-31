@@ -4,11 +4,12 @@ use std::sync::Arc;
 use crate::error::AppResult;
 
 /// Общее состояние приложения: политика и настройки. Клонируется дёшево (всё за `Arc`).
-/// Реестр идущих разборов добавляется в Task 13.
 #[derive(Clone)]
 pub struct AppState {
     pub policy: Arc<crate::policy::Policy>,
     pub settings: Arc<crate::settings::SettingsStore>,
+    /// Идущие разборы сервисов (флаги отмены, `SCAN_BUSY`).
+    pub scans: Arc<crate::scan::run::ScanRegistry>,
 }
 
 impl AppState {
@@ -16,6 +17,7 @@ impl AppState {
         Ok(Self {
             policy: Arc::new(crate::policy::Policy::default()),
             settings: Arc::new(crate::settings::SettingsStore::open(data_dir)),
+            scans: Arc::default(),
         })
     }
 

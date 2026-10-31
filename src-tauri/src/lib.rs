@@ -8,6 +8,7 @@ pub mod logging;
 pub mod policy;
 pub mod product;
 pub mod project;
+pub mod scan;
 pub mod settings;
 pub mod state;
 pub mod storage;
@@ -49,6 +50,17 @@ pub fn run() {
             commands::project::project_save,
             commands::project::project_recent,
             commands::project::open_path,
+            commands::scan::service_discover_contracts,
+            commands::scan::service_scan,
+            commands::scan::scan_cancel,
+            commands::registry::registry_list,
+            commands::registry::registry_get,
+            commands::registry::registry_update_manual,
+            commands::registry::registry_add_manual,
+            commands::registry::registry_delete,
+            commands::registry::registry_scans,
+            commands::registry::registry_diff,
+            commands::registry::registry_tables,
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");

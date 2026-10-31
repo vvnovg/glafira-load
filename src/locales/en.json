@@ -58,6 +58,14 @@
       "invalidManifest": "The manifest has {{count}} problem(s)",
       "pathNotAbsolute": "Project path must be absolute: {{path}}",
       "readOnly": "Project is read-only until its manifest is fixed: {{path}}"
+    },
+    "scan": {
+      "busy": "This service is already being scanned"
+    },
+    "registry": {
+      "notFound": "Operation {{id}} not found",
+      "duplicate": "Operation {{id}} already exists",
+      "scanNotFound": "Scan {{file}} not found"
     }
   },
   "settings": {

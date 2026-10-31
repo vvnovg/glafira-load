@@ -33,6 +33,8 @@ glafira-load-model = { path = "../crates/glafira-load-model" }
 glafira-load-contracts = { path = "../crates/glafira-load-contracts" }
 glafira-load-xlsx = { path = "../crates/glafira-load-xlsx" }
 dunce = "1"
+globset = "0.4"
+ignore = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
