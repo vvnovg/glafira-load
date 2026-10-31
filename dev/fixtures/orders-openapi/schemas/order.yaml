@@ -1,0 +1,14 @@
+NewOrder:
+  type: object
+  required: [items]
+  properties:
+    items:
+      type: array
+      items:
+        $ref: "#/Item"
+    note: { type: [string, "null"] }
+Item:
+  type: object
+  properties:
+    sku: { type: string }
+    qty: { type: integer, default: 1 }

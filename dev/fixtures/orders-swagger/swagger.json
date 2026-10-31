@@ -1,0 +1,20 @@
+{
+  "swagger": "2.0",
+  "info": { "title": "Legacy", "version": "1" },
+  "paths": {
+    "/legacy/pay": {
+      "post": {
+        "operationId": "pay",
+        "parameters": [
+          { "name": "X-Request-Id", "in": "header", "type": "string" },
+          { "name": "body", "in": "body", "required": true, "schema": { "$ref": "#/definitions/Payment" } }
+        ],
+        "responses": { "200": { "description": "ok", "schema": { "$ref": "#/definitions/Receipt" } } }
+      }
+    }
+  },
+  "definitions": {
+    "Payment": { "type": "object", "required": ["amount"], "properties": { "amount": { "type": "number" }, "currency": { "type": "string" } } },
+    "Receipt": { "type": "object", "properties": { "id": { "type": "string" } } }
+  }
+}

@@ -7,3 +7,11 @@ repository.workspace = true
 description = "Glafira for Load Testing: contracts"
 
 [dependencies]
+glafira-load-model = { path = "../glafira-load-model" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_yaml_ng = "0.10"
+regex = "1"
+roxmltree = "0.20"
+sqlparser = "0.58"
+thiserror = "2"

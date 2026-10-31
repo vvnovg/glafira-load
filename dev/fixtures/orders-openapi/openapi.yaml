@@ -1,0 +1,73 @@
+openapi: 3.0.3
+info: { title: Orders, version: "1.4.0" }
+paths:
+  /v1/orders:
+    post:
+      operationId: createOrder
+      summary: Create an order
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "./schemas/order.yaml#/NewOrder"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      callbacks:
+        onDone: {}
+  /v1/orders/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getOrder
+      parameters:
+        - name: expand
+          in: query
+          schema: { type: string, enum: [items, customer] }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "404":
+          description: Not found
+components:
+  schemas:
+    Order:
+      type: object
+      required: [id, status]
+      properties:
+        id: { type: string, example: "A-1" }
+        status: { type: string, enum: [NEW, PAID, FAILED] }
+        items:
+          type: array
+          items:
+            $ref: "./schemas/order.yaml#/Item"
+        customer:
+          $ref: "#/components/schemas/Customer"
+    Customer:
+      type: object
+      properties:
+        name: { type: string }
+        self:
+          $ref: "#/components/schemas/Customer"
+    Error:
+      type: object
+      properties:
+        code: { type: integer }
