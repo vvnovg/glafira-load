@@ -3,6 +3,8 @@
 
 pub mod diff;
 pub mod merge;
+pub mod prod_load;
+pub mod profile;
 pub mod project;
 pub mod registry;
 pub mod schema;
