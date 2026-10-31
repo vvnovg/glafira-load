@@ -4,6 +4,7 @@ pub mod commands;
 mod dock_name;
 pub mod error;
 pub mod git;
+pub mod load;
 pub mod logging;
 pub mod policy;
 pub mod product;
@@ -61,6 +62,13 @@ pub fn run() {
             commands::registry::registry_scans,
             commands::registry::registry_diff,
             commands::registry::registry_tables,
+            commands::load::prod_load_export_template,
+            commands::load::prod_load_preview_import,
+            commands::load::prod_load_apply_import,
+            commands::load::prod_load_get,
+            commands::load::profile_get,
+            commands::load::profile_save,
+            commands::load::profile_compute,
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");

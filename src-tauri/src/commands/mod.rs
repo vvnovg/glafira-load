@@ -1,4 +1,5 @@
 pub mod app;
+pub mod load;
 pub mod project;
 pub mod registry;
 pub mod scan;

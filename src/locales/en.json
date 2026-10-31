@@ -66,6 +66,19 @@
       "notFound": "Operation {{id}} not found",
       "duplicate": "Operation {{id}} already exists",
       "scanNotFound": "Scan {{file}} not found"
+    },
+    "template": {
+      "notTemplate": "The file is not a Glafira production-load template",
+      "unsupportedFormat": "Unsupported template format {{version}}",
+      "unreadable": "The file cannot be read as .xlsx",
+      "otherProject": "The template belongs to project {{found}}, expected {{expected}}",
+      "invalidRows": "The template has {{count}} invalid cell(s)"
+    },
+    "profile": {
+      "noProfiles": "Add at least one profile",
+      "notFound": "Profile {{name}} not found",
+      "invalidValue": "Invalid value in the profile: {{field}} = {{value}}",
+      "tooManySteps": "Phase {{phase}} has too many steps (limit {{max}})"
     }
   },
   "settings": {

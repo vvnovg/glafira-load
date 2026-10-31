@@ -1499,6 +1499,7 @@ dependencies = [
  "globset",
  "ignore",
  "plist",
+ "rust_xlsxwriter",
  "serde",
  "serde_json",
  "sys-locale",

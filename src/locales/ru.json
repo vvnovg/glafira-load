@@ -66,6 +66,19 @@
       "notFound": "Операция {{id}} не найдена",
       "duplicate": "Операция {{id}} уже есть",
       "scanNotFound": "Снимок {{file}} не найден"
+    },
+    "template": {
+      "notTemplate": "Файл не является шаблоном нагрузки ПРОМ Glafira",
+      "unsupportedFormat": "Неподдерживаемый формат шаблона: {{version}}",
+      "unreadable": "Файл не читается как .xlsx",
+      "otherProject": "Шаблон от проекта {{found}}, ожидался {{expected}}",
+      "invalidRows": "В шаблоне ошибочных ячеек: {{count}}"
+    },
+    "profile": {
+      "noProfiles": "Добавьте хотя бы один профиль",
+      "notFound": "Профиль {{name}} не найден",
+      "invalidValue": "Недопустимое значение в профиле: {{field}} = {{value}}",
+      "tooManySteps": "В фазе {{phase}} слишком много ступеней (максимум {{max}})"
     }
   },
   "settings": {
