@@ -1,0 +1,14 @@
+{
+  "type": "record",
+  "name": "OrderCreated",
+  "namespace": "demo",
+  "fields": [
+    { "name": "orderId", "type": "string" },
+    { "name": "total", "type": ["null", "double"], "default": null },
+    { "name": "status", "type": { "type": "enum", "name": "Status", "symbols": ["NEW", "PAID"] } },
+    { "name": "items", "type": { "type": "array", "items": { "type": "record", "name": "Item", "fields": [ { "name": "sku", "type": "string" }, { "name": "qty", "type": "int" } ] } } },
+    { "name": "labels", "type": { "type": "map", "values": "string" } },
+    { "name": "parent", "type": ["null", "demo.OrderCreated"] },
+    { "name": "amount", "type": { "type": "bytes", "logicalType": "decimal", "precision": 10, "scale": 2 } }
+  ]
+}
