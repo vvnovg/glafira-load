@@ -1,5 +1,6 @@
 import { useTranslation } from "react-i18next";
 import type { Phase } from "../../api/types";
+import { NumberInput } from "../common/NumberInput";
 
 const KINDS: Phase["kind"][] = ["ramp", "steady", "steps"];
 
@@ -60,13 +61,12 @@ export function PhaseEditor({ phases, onChange }: { phases: Phase[]; onChange: (
   const num = (i: number, p: Phase, key: string, label: string) => (
     <label key={key}>
       {label}
-      <input
-        type="number"
+      <NumberInput
         aria-label={`${label} ${i + 1}`}
         aria-invalid={invalidPhaseFields(p).includes(key) || undefined}
-        step="any"
         value={(p as unknown as Record<string, number>)[key]}
-        onChange={(e) => set(i, { ...p, [key]: Number(e.target.value) } as Phase)}
+        // Пустое или недописанное поле («-») попадает в фазу как NaN: проверка помечает его, сохранение блокируется.
+        onChange={(v) => set(i, { ...p, [key]: v ?? Number.NaN } as Phase)}
       />
     </label>
   );

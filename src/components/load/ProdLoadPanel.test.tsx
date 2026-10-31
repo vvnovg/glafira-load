@@ -1,12 +1,14 @@
-import { screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import type { ProdLoad, TemplateLabels, TemplatePreview } from "../../api/types";
 import { renderWithClient } from "../../test/render";
+import { ImportPreviewView } from "./ImportPreviewView";
 import { ProdLoadPanel } from "./ProdLoadPanel";
 
 // vi.mock поднимается над импортами — объекты моков создаются там же через vi.hoisted.
-const { api, preview } = vi.hoisted(() => {
+const { api, preview, state } = vi.hoisted(() => {
+  const state = { readOnly: false };
   const source = { stand: "prod", period_from: "", period_to: "", system: "", filled_by: "", imported_at: "", file: "" };
   const preview: TemplatePreview = {
     filled: ["http:o:POST /a"],
@@ -19,7 +21,7 @@ const { api, preview } = vi.hoisted(() => {
     skipped_rows: 2,
   };
   const api = {
-    projectView: vi.fn(async () => ({ path: "/p", manifest: { format: 1, name: "orders", services: [], environments: [] }, problems: [], readOnly: false, missingServices: [] })),
+    projectView: vi.fn(async () => ({ path: "/p", manifest: { format: 1, name: "orders", services: [], environments: [] }, problems: [], readOnly: state.readOnly, missingServices: [] })),
     prodLoadGet: vi.fn(async (): Promise<ProdLoad> => ({ format: 1, source: { ...source, stand: "" }, operations: { "http:o:POST /a": { avg: 1, peak: 2 } } })),
     registryList: vi.fn(async () => [
       { id: "http:o:POST /a", service: "o", kind: "http", name: "a", summary: "", source: "openapi", status: "active", lastVersion: "v", topicGuessed: false },
@@ -29,12 +31,23 @@ const { api, preview } = vi.hoisted(() => {
     prodLoadPreviewImport: vi.fn(async (): Promise<TemplatePreview> => preview),
     prodLoadApplyImport: vi.fn(async (_path: string, _file: string): Promise<ProdLoad> => ({ format: 1, source, operations: {} })),
   };
-  return { api, preview };
+  return { api, preview, state };
 });
 vi.mock("../../api/client", () => ({ api, toAppError: (e: unknown) => e }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ save: vi.fn(async () => "/out/t.xlsx"), open: vi.fn(async () => "/in/filled.xlsx") }));
 
+/** Кнопка импорта включается, когда манифест прочитан и проект доступен для записи. */
+async function importButton() {
+  const button = await screen.findByRole("button", { name: "Импортировать…" });
+  await waitFor(() => expect(button).toBeEnabled());
+  return button;
+}
+
 describe("ProdLoadPanel", () => {
+  beforeEach(() => {
+    state.readOnly = false;
+  });
+
   it("exports a template with labels and shows uncovered operations", async () => {
     renderWithClient(<ProdLoadPanel path="/p" />);
     expect(await screen.findByText("Операций без цифр ПРОМ: 1")).toBeInTheDocument();
@@ -50,7 +63,7 @@ describe("ProdLoadPanel", () => {
 
   it("previews an import and blocks apply while there are invalid cells", async () => {
     renderWithClient(<ProdLoadPanel path="/p" />);
-    await userEvent.click(await screen.findByRole("button", { name: "Импортировать…" }));
+    await userEvent.click(await importButton());
     expect(await screen.findByText(/Заполнено 1, пустых 0, неизвестных ID 1, с ошибками 1/)).toBeInTheDocument();
     expect(screen.getByText("пик меньше среднего")).toBeInTheDocument();
     expect(screen.getByText("Строк с цифрами без ID, пропущено: 2")).toBeInTheDocument();
@@ -62,11 +75,22 @@ describe("ProdLoadPanel", () => {
     api.prodLoadPreviewImport.mockResolvedValueOnce({ ...preview, invalid: [], skipped_rows: 0, result });
     api.prodLoadApplyImport.mockResolvedValueOnce(result);
     renderWithClient(<ProdLoadPanel path="/p" />);
-    await userEvent.click(await screen.findByRole("button", { name: "Импортировать…" }));
+    await userEvent.click(await importButton());
     const applyButton = await screen.findByRole("button", { name: "Применить" });
     expect(applyButton).toBeEnabled();
     await userEvent.click(applyButton);
     expect(api.prodLoadApplyImport).toHaveBeenCalledWith("/p", "/in/filled.xlsx");
     await waitFor(() => expect(screen.queryByText("Предпросмотр импорта")).not.toBeInTheDocument());
+  });
+
+  it("disables import and apply in a read-only project but keeps the export", async () => {
+    state.readOnly = true;
+    renderWithClient(<ProdLoadPanel path="/p" />);
+    expect(await screen.findByText("Только чтение")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Импортировать…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Выгрузить шаблон…" })).toBeEnabled();
+    const result: ProdLoad = { format: 1, source: preview.source, operations: {} };
+    render(<ImportPreviewView preview={{ ...preview, invalid: [], result }} busy={false} readOnly onApply={() => undefined} onCancel={() => undefined} />);
+    expect(screen.getByRole("button", { name: "Применить" })).toBeDisabled();
   });
 });

@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../../api/client";
@@ -7,6 +7,7 @@ import { useHelpChapter } from "../../state/helpContext";
 import { tabId } from "../../state/workspace";
 import { ErrorBanner } from "../common/ErrorBanner";
 import { Hint } from "../common/Hint";
+import { NumberInput } from "../common/NumberInput";
 import { invalidPhaseFields, PhaseEditor } from "./PhaseEditor";
 import { TimelineChart } from "./TimelineChart";
 
@@ -35,13 +36,12 @@ function OverrideTable({ title, rows, onChange }: { title: string; rows: Record<
   const [key, setKey] = useState("");
   const setRow = (k: string, o: Override) => onChange({ ...rows, [k]: o });
   const field = (k: string, o: Override, which: "k_env" | "k_growth") => (
-    <input
-      type="number"
-      step="any"
+    <NumberInput
+      optional
       aria-label={`${title}: ${which} ${k}`}
       aria-invalid={!validK(o[which]) || undefined}
-      value={o[which] ?? ""}
-      onChange={(e) => setRow(k, { ...o, [which]: e.target.value === "" ? undefined : Number(e.target.value) })}
+      value={o[which]}
+      onChange={(v) => setRow(k, { ...o, [which]: v })}
     />
   );
   return (
@@ -90,6 +90,7 @@ export function ProfilePanel({ path }: { path: string }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   useHelpChapter(tabId({ kind: "profile", path }), "profile");
+  const project = useQuery({ queryKey: ["project", path], queryFn: () => api.projectView(path) });
   const file = useQuery({ queryKey: ["profile", path], queryFn: () => api.profileGet(path) });
   const [draft, setDraft] = useState<ProfileFile | null>(null);
   const [name, setName] = useState("nominal");
@@ -102,15 +103,15 @@ export function ProfilePanel({ path }: { path: string }) {
   }, [file.data]); // eslint-disable-line react-hooks/exhaustive-deps
   const save = useMutation({
     mutationFn: (p: ProfileFile) => api.profileSave(path, p),
-    onSuccess: (p) => {
-      qc.setQueryData(["profile", path], p);
-      void qc.invalidateQueries({ queryKey: ["profileComputed", path] });
-    },
+    // Новый файл входит в ключ расчёта — пересчёт запустится сам, без отдельной инвалидации.
+    onSuccess: (p) => qc.setQueryData(["profile", path], p),
   });
   const computed = useQuery({
     queryKey: ["profileComputed", path, name, file.data],
     queryFn: () => api.profileCompute(path, name),
     enabled: !!file.data && !!name && name in (file.data?.profiles ?? {}),
+    // Цели и график не пропадают на время пересчёта после сохранения или смены профиля.
+    placeholderData: keepPreviousData,
   });
 
   if (file.error) return <ErrorBanner error={file.error} onRetry={() => file.refetch()} />;
@@ -123,7 +124,11 @@ export function ProfilePanel({ path }: { path: string }) {
   const overrides = draft.coefficients.overrides;
   const trimmed = newName.trim();
   const taken = trimmed in draft.profiles;
-  const c = computed.data;
+  // Профиль, которого ещё нет в сохранённом файле, не посчитать: сначала сохранить.
+  const savedProfile = !!profile && name in file.data.profiles;
+  const c = savedProfile ? computed.data : undefined;
+  // Пока манифест не прочитан или в нём есть проблемы, профиль только просматривается.
+  const readOnly = !project.data || project.data.readOnly;
 
   return (
     <div className="page">
@@ -131,33 +136,37 @@ export function ProfilePanel({ path }: { path: string }) {
         <h2>
           {t("profile.title")} <Hint k="hints.profile.title" label={t("profile.title")} />
         </h2>
-        <button type="button" disabled={!dirty || invalid || save.isPending} onClick={() => save.mutate(draft)}>
+        <button type="button" disabled={!dirty || invalid || save.isPending || readOnly} onClick={() => save.mutate(draft)}>
           {t("common.save")}
         </button>
-        <button type="button" disabled={!dirty} onClick={() => setDraft(clone(file.data))}>
+        <button type="button" disabled={!dirty || readOnly} onClick={() => setDraft(clone(file.data))}>
           {t("project.revert")}
         </button>
+        {project.data?.readOnly && <span className="muted">{t("common.readOnly")}</span>}
         {dirty && <span className="muted">{t("profile.unsaved")}</span>}
         {invalid && <span className="warn">{t("profile.invalidValues")}</span>}
       </div>
+      {project.error && <ErrorBanner error={project.error} onRetry={() => project.refetch()} />}
       {save.error && <ErrorBanner error={save.error} />}
-      <section className="form">
-        <h3>
-          {t("profile.coefficients")} <Hint k="hints.profile.coefficients" label={t("profile.coefficients")} />
-        </h3>
-        <div className="row">
-          <label>
-            k_env
-            <input type="number" step="any" aria-label="k_env" aria-invalid={!validK(draft.coefficients.k_env) || undefined} value={draft.coefficients.k_env} onChange={(e) => setCoef({ k_env: Number(e.target.value) })} />
-          </label>
-          <label>
-            k_growth
-            <input type="number" step="any" aria-label="k_growth" aria-invalid={!validK(draft.coefficients.k_growth) || undefined} value={draft.coefficients.k_growth} onChange={(e) => setCoef({ k_growth: Number(e.target.value) })} />
-          </label>
-        </div>
-        <OverrideTable title={t("profile.serviceOverrides")} rows={overrides.services ?? EMPTY_ROWS} onChange={(services) => setCoef({ overrides: { ...overrides, services } })} />
-        <OverrideTable title={t("profile.operationOverrides")} rows={overrides.operations ?? EMPTY_ROWS} onChange={(operations) => setCoef({ overrides: { ...overrides, operations } })} />
-      </section>
+      <fieldset className="plain" disabled={readOnly}>
+        <section className="form">
+          <h3>
+            {t("profile.coefficients")} <Hint k="hints.profile.coefficients" label={t("profile.coefficients")} />
+          </h3>
+          <div className="row">
+            <label>
+              k_env
+              <NumberInput aria-label="k_env" aria-invalid={!validK(draft.coefficients.k_env) || undefined} value={draft.coefficients.k_env} onChange={(v) => setCoef({ k_env: v ?? Number.NaN })} />
+            </label>
+            <label>
+              k_growth
+              <NumberInput aria-label="k_growth" aria-invalid={!validK(draft.coefficients.k_growth) || undefined} value={draft.coefficients.k_growth} onChange={(v) => setCoef({ k_growth: v ?? Number.NaN })} />
+            </label>
+          </div>
+          <OverrideTable title={t("profile.serviceOverrides")} rows={overrides.services ?? EMPTY_ROWS} onChange={(services) => setCoef({ overrides: { ...overrides, services } })} />
+          <OverrideTable title={t("profile.operationOverrides")} rows={overrides.operations ?? EMPTY_ROWS} onChange={(operations) => setCoef({ overrides: { ...overrides, operations } })} />
+        </section>
+      </fieldset>
       <section className="form">
         <h3>{t("profile.profiles")}</h3>
         <div className="row">
@@ -166,10 +175,10 @@ export function ProfilePanel({ path }: { path: string }) {
               <option key={n}>{n}</option>
             ))}
           </select>
-          <input aria-label={t("profile.newName")} placeholder={t("profile.newName")} value={newName} onChange={(e) => setNewName(e.target.value)} />
+          <input aria-label={t("profile.newName")} placeholder={t("profile.newName")} value={newName} disabled={readOnly} onChange={(e) => setNewName(e.target.value)} />
           <button
             type="button"
-            disabled={!trimmed || taken}
+            disabled={!trimmed || taken || readOnly}
             onClick={() => {
               setDraft({ ...draft, profiles: { ...draft.profiles, [trimmed]: { basis: "avg", phases: [{ kind: "ramp", minutes: 10, to_pct: 100 }, { kind: "steady", minutes: 30 }] } } });
               setName(trimmed);
@@ -180,7 +189,7 @@ export function ProfilePanel({ path }: { path: string }) {
           </button>
           <button
             type="button"
-            disabled={!trimmed || taken || !profile}
+            disabled={!trimmed || taken || !profile || readOnly}
             onClick={() => {
               // Порядок профилей сохраняем: переименованный остаётся на своём месте.
               setDraft({ ...draft, profiles: Object.fromEntries(Object.entries(draft.profiles).map(([n, p]) => [n === name ? trimmed : n, p])) });
@@ -192,7 +201,7 @@ export function ProfilePanel({ path }: { path: string }) {
           </button>
           <button
             type="button"
-            disabled={Object.keys(draft.profiles).length <= 1 || !profile}
+            disabled={Object.keys(draft.profiles).length <= 1 || !profile || readOnly}
             onClick={() => {
               const rest = Object.fromEntries(Object.entries(draft.profiles).filter(([n]) => n !== name));
               setDraft({ ...draft, profiles: rest });
@@ -203,7 +212,7 @@ export function ProfilePanel({ path }: { path: string }) {
           </button>
         </div>
         {profile && (
-          <>
+          <fieldset className="plain" disabled={readOnly}>
             <label>
               {t("profile.basis")}
               <select aria-label={t("profile.basis")} value={profile.basis} onChange={(e) => setProfile({ basis: e.target.value as Basis })}>
@@ -212,12 +221,13 @@ export function ProfilePanel({ path }: { path: string }) {
               </select>
             </label>
             <PhaseEditor phases={profile.phases} onChange={(phases) => setProfile({ phases })} />
-          </>
+          </fieldset>
         )}
       </section>
-      {computed.error && <ErrorBanner error={computed.error} onRetry={() => computed.refetch()} />}
+      {profile && !savedProfile && <p className="muted">{t("profile.saveToCompute")}</p>}
+      {savedProfile && computed.error && <ErrorBanner error={computed.error} onRetry={() => computed.refetch()} />}
       {c && (
-        <section>
+        <section className={computed.isPlaceholderData ? "stale" : undefined} aria-busy={computed.isPlaceholderData || undefined}>
           <h3>{t("profile.targets", { profile: c.profile, total: c.total.toFixed(1), minutes: c.total_minutes })}</h3>
           {dirty && <p className="muted">{t("profile.computedFromSaved")}</p>}
           <TimelineChart points={c.timeline} total={c.total} />

@@ -56,6 +56,8 @@ export function ProdLoadPanel({ path }: { path: string }) {
   const list = rows.data ?? [];
   if (!data) return <p className="empty">{t("common.loading")}</p>;
   const uncovered = list.filter((r) => !data.operations[r.id]);
+  // Пока манифест не прочитан или в нём есть проблемы, цифры не записываются; выгрузка шаблона разрешена.
+  const readOnly = !project.data || project.data.readOnly;
 
   return (
     <div className="page">
@@ -69,15 +71,17 @@ export function ProdLoadPanel({ path }: { path: string }) {
         <label>
           <input type="checkbox" checked={prefill} onChange={(e) => setPrefill(e.target.checked)} /> {t("prodLoad.prefill")}
         </label>
-        <button type="button" disabled={importTemplate.isPending} onClick={() => importTemplate.mutate()}>
+        <button type="button" disabled={importTemplate.isPending || readOnly} onClick={() => importTemplate.mutate()}>
           {t("prodLoad.import")}
         </button>
+        {project.data?.readOnly && <span className="muted">{t("common.readOnly")}</span>}
       </div>
+      {project.error && <ErrorBanner error={project.error} onRetry={() => project.refetch()} />}
       {exported && <p className="notice">{exported}</p>}
       {exportTemplate.error && <ErrorBanner error={exportTemplate.error} />}
       {importTemplate.error && <ErrorBanner error={importTemplate.error} />}
       {apply.error && <ErrorBanner error={apply.error} />}
-      {preview && <ImportPreviewView preview={preview.data} busy={apply.isPending} onApply={() => apply.mutate(preview.file)} onCancel={() => setPreview(null)} />}
+      {preview && <ImportPreviewView preview={preview.data} busy={apply.isPending} readOnly={readOnly} onApply={() => apply.mutate(preview.file)} onCancel={() => setPreview(null)} />}
       {data.source.imported_at && <p className="muted">{t("prodLoad.importedAt", { at: data.source.imported_at.slice(0, 16), stand: data.source.stand || "—", file: data.source.file })}</p>}
       {rows.error && <ErrorBanner error={rows.error} onRetry={() => rows.refetch()} />}
       <table>

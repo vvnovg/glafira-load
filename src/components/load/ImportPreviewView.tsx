@@ -10,8 +10,8 @@ function figures(f: Figures | null): string {
   return parts.join(" · ");
 }
 
-/** Предпросмотр импорта: счётчики, ошибки по строкам, дифф цифр; «Применить» только без ошибок. */
-export function ImportPreviewView({ preview, onApply, onCancel, busy }: { preview: TemplatePreview; onApply: () => void; onCancel: () => void; busy: boolean }) {
+/** Предпросмотр импорта: счётчики, ошибки по строкам, дифф цифр; «Применить» только без ошибок и не в проекте только для чтения. */
+export function ImportPreviewView({ preview, onApply, onCancel, busy, readOnly = false }: { preview: TemplatePreview; onApply: () => void; onCancel: () => void; busy: boolean; readOnly?: boolean }) {
   const { t } = useTranslation();
   return (
     <section className="panel import-preview">
@@ -80,7 +80,7 @@ export function ImportPreviewView({ preview, onApply, onCancel, busy }: { previe
         </table>
       )}
       <div className="row">
-        <button type="button" disabled={!preview.result || preview.invalid.length > 0 || busy} onClick={onApply}>
+        <button type="button" disabled={!preview.result || preview.invalid.length > 0 || busy || readOnly} onClick={onApply}>
           {t("prodLoad.apply")}
         </button>
         <button type="button" onClick={onCancel}>
