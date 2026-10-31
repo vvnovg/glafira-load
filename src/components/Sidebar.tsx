@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { useWorkspace } from "../state/workspace";
 import { openSupport } from "../lib/links";
+import { ProjectTree } from "./projects/ProjectTree";
 
 export function Sidebar() {
   const { t } = useTranslation();
@@ -8,9 +9,7 @@ export function Sidebar() {
 
   return (
     <aside className="sidebar">
-      <div className="tree" data-testid="project-tree">
-        <p className="empty">{t("sidebar.emptyHint")}</p>
-      </div>
+      <ProjectTree />
       <div className="sidebar-footer">
         <button type="button" className="link" onClick={() => open({ kind: "settings" })}>
           {t("sidebar.settings")}

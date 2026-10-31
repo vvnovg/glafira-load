@@ -3,7 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { renderWithClient } from "../test/render";
 import { useWorkspace } from "../state/workspace";
-import { Layout, projectLabel } from "./Layout";
+import { baseName } from "../lib/paths";
+import { Layout } from "./Layout";
 
 vi.mock("../api/client", () => ({
   api: {
@@ -11,6 +12,7 @@ vi.mock("../api/client", () => ({
     getLanguageSettings: vi.fn(async () => ({ effective: "ru", chosen: null, policy: null, systemMatch: null, reason: "default", languages: ["en", "ru"] })),
     getPolicyStatus: vi.fn(async () => ({ managed: false, source: null, updatesEnabled: false, updateUrl: null, language: null, errors: [] })),
     checkUpdate: vi.fn(async () => ({ status: "disabled", reason: { key: "errors.updates.notConfigured", params: {}, text: "x" } })),
+    projectRecent: vi.fn(async () => []),
   },
   toAppError: (e: unknown) => e,
   isAppError: () => false,
@@ -25,6 +27,6 @@ describe("Layout", () => {
     expect(await screen.findByRole("tab", { name: "orders-load · Реестр" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Закрыть вкладку" }));
     expect(screen.queryByRole("tab")).toBeNull();
-    expect(projectLabel("C:\\work\\p\\")).toBe("p");
+    expect(baseName("C:\\work\\p\\")).toBe("p");
   });
 });

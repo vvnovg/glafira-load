@@ -139,7 +139,12 @@
     "about": "About Glafira"
   },
   "hints": {
-    "label": "Hint: {{name}}"
+    "label": "Hint: {{name}}",
+    "project": {
+      "folder": "An empty folder inside your git repository: the project is a set of text files that you commit.",
+      "services": "A service is a local git clone of the system under test; its contracts are found automatically or listed on the service tab.",
+      "environments": "Addresses of your stands without passwords; secrets come with the runner in stage L2."
+    }
   },
   "sidebar": {
     "settings": "Settings",
@@ -155,7 +160,9 @@
     "registry": "Operation registry",
     "prodLoad": "Production load",
     "profile": "Load profile",
-    "environments": "Environments"
+    "environments": "Environments",
+    "project": "Project",
+    "folderToggle": "Expand or collapse {{name}}"
   },
   "tabs": {
     "settings": "Settings",
@@ -171,5 +178,43 @@
   "layout": {
     "closeTab": "Close tab",
     "empty": "Open a project on the left or create a new one."
+  },
+  "project": {
+    "newTitle": "New load project",
+    "name": "Project name",
+    "folder": "Folder",
+    "noFolder": "not chosen",
+    "chooseFolder": "Choose folder…",
+    "create": "Create project",
+    "openFolder": "Open folder",
+    "scanAll": "Scan all services",
+    "scanProgress": "{{service}}: {{done}} of {{total}} {{file}}",
+    "scanResult": "{{service}} ({{version}}): found {{found}}, new {{added}}, changed {{changed}}, removed {{removed}}, errors {{errors}}",
+    "readOnly": "The manifest has problems; fix the file and reopen the project:",
+    "services": "Services",
+    "serviceId": "Service ID",
+    "serviceName": "Name",
+    "serviceMissing": "Service folder not found",
+    "addService": "Add service",
+    "environments": "Environments",
+    "envId": "Environment ID",
+    "envKind": "Kind",
+    "env": {
+      "http": "HTTP base URL",
+      "kafka": "Kafka bootstrap",
+      "grpc": "gRPC address",
+      "sql": "DB connection (no password)"
+    },
+    "addEnvironment": "Add environment",
+    "revert": "Revert",
+    "problems": {
+      "bad_format": "Unsupported manifest format {{format}}",
+      "empty_name": "Project name is empty",
+      "bad_service_id": "Bad service ID “{{id}}” (a–z, 0–9, hyphen)",
+      "duplicate_service_id": "Duplicate service ID “{{id}}”",
+      "empty_service_path": "Service “{{id}}” has no folder",
+      "bad_environment_id": "Bad environment ID “{{id}}”",
+      "duplicate_environment_id": "Duplicate environment ID “{{id}}”"
+    }
   }
 }

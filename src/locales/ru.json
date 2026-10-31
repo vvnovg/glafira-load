@@ -139,7 +139,12 @@
     "about": "О программе"
   },
   "hints": {
-    "label": "Подсказка: {{name}}"
+    "label": "Подсказка: {{name}}",
+    "project": {
+      "folder": "Пустая папка внутри вашего git-репозитория: проект — набор текстовых файлов, которые вы коммитите.",
+      "services": "Сервис — локальный клон git тестируемой системы; контракты находятся автоматически или перечисляются на вкладке сервиса.",
+      "environments": "Адреса стендов без паролей; секреты появятся вместе с раннером на этапе L2."
+    }
   },
   "sidebar": {
     "settings": "Настройки",
@@ -155,7 +160,9 @@
     "registry": "Реестр операций",
     "prodLoad": "Нагрузка ПРОМ",
     "profile": "Профиль нагрузки",
-    "environments": "Стенды"
+    "environments": "Стенды",
+    "project": "Проект",
+    "folderToggle": "Развернуть или свернуть {{name}}"
   },
   "tabs": {
     "settings": "Настройки",
@@ -171,5 +178,43 @@
   "layout": {
     "closeTab": "Закрыть вкладку",
     "empty": "Откройте проект слева или создайте новый."
+  },
+  "project": {
+    "newTitle": "Новый проект НТ",
+    "name": "Имя проекта",
+    "folder": "Папка",
+    "noFolder": "не выбрана",
+    "chooseFolder": "Выбрать папку…",
+    "create": "Создать проект",
+    "openFolder": "Открыть папку",
+    "scanAll": "Разобрать все сервисы",
+    "scanProgress": "{{service}}: {{done}} из {{total}} {{file}}",
+    "scanResult": "{{service}} ({{version}}): найдено {{found}}, новых {{added}}, изменённых {{changed}}, удалённых {{removed}}, ошибок {{errors}}",
+    "readOnly": "В манифесте есть проблемы; исправьте файл и откройте проект заново:",
+    "services": "Сервисы",
+    "serviceId": "ID сервиса",
+    "serviceName": "Имя",
+    "serviceMissing": "Папка сервиса не найдена",
+    "addService": "Добавить сервис",
+    "environments": "Стенды",
+    "envId": "ID стенда",
+    "envKind": "Вид",
+    "env": {
+      "http": "Базовый адрес HTTP",
+      "kafka": "Bootstrap Kafka",
+      "grpc": "Адрес gRPC",
+      "sql": "Строка БД (без пароля)"
+    },
+    "addEnvironment": "Добавить стенд",
+    "revert": "Отменить правки",
+    "problems": {
+      "bad_format": "Неподдерживаемый формат манифеста {{format}}",
+      "empty_name": "Имя проекта пустое",
+      "bad_service_id": "Плохой ID сервиса «{{id}}» (a–z, 0–9, дефис)",
+      "duplicate_service_id": "Повтор ID сервиса «{{id}}»",
+      "empty_service_path": "У сервиса «{{id}}» нет папки",
+      "bad_environment_id": "Плохой ID стенда «{{id}}»",
+      "duplicate_environment_id": "Повтор ID стенда «{{id}}»"
+    }
   }
 }

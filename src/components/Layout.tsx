@@ -6,11 +6,7 @@ import { TabContent } from "./TabContent";
 import { UpdateNotice } from "./about/UpdateNotice";
 import { TabActiveContext } from "../lib/tabActive";
 import { useHelpShortcut } from "../lib/useHelpShortcut";
-
-/** Имя папки проекта: заголовки вкладок до загрузки манифеста (и для тестов). */
-export function projectLabel(path: string): string {
-  return path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
-}
+import { baseName } from "../lib/paths";
 
 function tabTitle(tab: Tab): string {
   switch (tab.kind) {
@@ -21,15 +17,15 @@ function tabTitle(tab: Tab): string {
     case "help":
       return i18n.t("tabs.help");
     case "project":
-      return tab.path ? i18n.t("tabs.project", { name: projectLabel(tab.path) }) : i18n.t("tabs.newProject");
+      return tab.path ? i18n.t("tabs.project", { name: baseName(tab.path) }) : i18n.t("tabs.newProject");
     case "service":
-      return i18n.t("tabs.service", { name: projectLabel(tab.path), service: tab.serviceId });
+      return i18n.t("tabs.service", { name: baseName(tab.path), service: tab.serviceId });
     case "registry":
-      return i18n.t("tabs.registry", { name: projectLabel(tab.path) });
+      return i18n.t("tabs.registry", { name: baseName(tab.path) });
     case "prod-load":
-      return i18n.t("tabs.prodLoad", { name: projectLabel(tab.path) });
+      return i18n.t("tabs.prodLoad", { name: baseName(tab.path) });
     case "profile":
-      return i18n.t("tabs.profile", { name: projectLabel(tab.path) });
+      return i18n.t("tabs.profile", { name: baseName(tab.path) });
   }
 }
 

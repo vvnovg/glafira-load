@@ -102,7 +102,8 @@ tr.clickable:hover, .row.clickable:hover { background: var(--bg-alt); }
 .subtabs button { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none; }
 .subtabs button.active { border-bottom-color: var(--accent); font-weight: 600; }
 .vlist { flex: 1; overflow: auto; position: relative; border: 1px solid var(--border); border-radius: 4px; min-height: 200px; }
-.row { display: grid; align-items: center; position: absolute; left: 0; right: 0; padding: 0 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.row label { display: flex; flex-direction: column; gap: 2px; color: var(--muted); }
 .row > span { overflow: hidden; text-overflow: ellipsis; padding-right: 8px; }
 .row.header { position: sticky; top: 0; z-index: 1; background: var(--bg-alt); color: var(--muted); }
 tr.selected { background: color-mix(in srgb, var(--accent) 15%, transparent); }
@@ -188,3 +189,17 @@ label.inline { display: inline-flex; gap: 4px; align-items: center; white-space:
 .health-badge { margin-left: 4px; }
 .health-block { border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
 .health-block h3 { margin: 0 0 4px; font-size: 14px; }
+
+/* Дерево проектов и вкладка «Проект» */
+.tree > li.tree-folder { display: block; }
+.tree-folder.tree-error { margin: 0; font-size: inherit; }
+button.tree-caret { background: none; border: none; padding: 0; width: 12px; }
+button.tree-name { text-align: left; }
+.form.stack { display: flex; flex-direction: column; align-items: stretch; gap: 8px; max-width: 760px; min-width: 0; margin: 0; padding: 0; border: none; }
+.form.stack > button { align-self: flex-start; }
+.form.stack h3 { margin: 8px 0 0; font-size: 14px; }
+.field { display: flex; flex-direction: column; gap: 4px; }
+.panel > .row code { overflow-wrap: anywhere; }
+input:invalid { border-color: var(--danger); }
+.page > .notice { flex-direction: column; align-items: flex-start; border: 1px solid var(--warn); border-radius: 6px; }
+.notice ul, .scan-results { margin: 0; padding-left: 20px; }
