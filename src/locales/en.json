@@ -1,0 +1,141 @@
+{
+  "common": {
+    "retry": "Retry",
+    "cancel": "Cancel",
+    "save": "Save",
+    "delete": "Delete",
+    "close": "Close",
+    "loading": "Loading…",
+    "details": "Details",
+    "readOnly": "Read-only"
+  },
+  "errors": {
+    "app": {
+      "taskPanicked": "Background task failed: {{error}}"
+    },
+    "settings": {
+      "languageByPolicy": "The language is set by your organization",
+      "unknownLanguage": "Unknown language “{{code}}”"
+    },
+    "internal": "Internal error",
+    "io": "I/O error: {{error}}",
+    "json": "JSON error: {{error}}",
+    "generic": "{{message}}",
+    "policy": {
+      "invalidBool": "{{key}}: invalid boolean {{value}}",
+      "invalidNumber": "{{key}}: invalid number {{value}}",
+      "invalidString": "{{key}}: invalid string “{{value}}”",
+      "invalidType": "{{key}}: invalid value of type {{kind}}",
+      "unreadable": "Policy cannot be read: {{reason}}",
+      "httpsRequired": "{{key}}: an https:// address is required — updates are not downloaded over http",
+      "badLanguage": "{{key}}: unknown language “{{value}}”"
+    },
+    "storage": {
+      "writeFailed": "Failed to write {{path}}: {{error}}",
+      "newerSchema": "{{file}} was created by a newer version of the app (schemaVersion {{version}})",
+      "quarantineFailed": "File {{path}} is corrupted ({{parseError}}) and a backup copy could not be saved: {{renameError}}"
+    },
+    "updates": {
+      "managed": "Updates are managed by your organization",
+      "notConfigured": "Updates are not configured in this build",
+      "badPolicyUrl": "Invalid update address in the policy: {{url}}",
+      "unavailable": "Updates are unavailable",
+      "noRelease": "The update server has no published versions (or it is temporarily unavailable)",
+      "checkFailed": "Failed to check for updates",
+      "downloadInterrupted": "The update download was interrupted — check your network and try again",
+      "badSignature": "The update signature failed verification — the update was not installed",
+      "installFailed": "Failed to install the update",
+      "none": "No updates available"
+    },
+    "project": {
+      "emptyName": "Project name cannot be empty"
+    }
+  },
+  "settings": {
+    "title": "Settings",
+    "language": {
+      "section": "Language",
+      "label": "Interface language",
+      "system": "System default ({{name}})",
+      "systemUnknown": "System default",
+      "policy": "The language is set by your organization"
+    }
+  },
+  "about": {
+    "summary": "Glafira for Load Testing is a desktop tool for preparing and maintaining load tests. This version (stage L1) builds the registry of operations from the contracts of your services, exports the production-load template to Excel, imports the filled template and computes the load profile. The CLI runner, suites, mocks and reports come in the next stages.",
+    "version": "Version",
+    "build": "Build",
+    "system": "System",
+    "license": "License",
+    "policy": "Organization policy",
+    "policySet": "set",
+    "policyNone": "none",
+    "policyError": "Organization policy: {{error}}",
+    "dataDir": "Data:",
+    "logDir": "Logs:",
+    "trademarks": "Apache Kafka is a trademark of the Apache Software Foundation. Other product names are trademarks of their respective owners. This project is not affiliated with them.",
+    "updates": {
+      "title": "Updates",
+      "check": "Check for updates",
+      "upToDate": "You have the latest version",
+      "available": "Version {{version}} is available",
+      "notesAria": "What's new in version {{version}}",
+      "install": "Install and restart",
+      "installing": "Downloading and installing the update…"
+    },
+    "notice": {
+      "available": "Version {{version}} is available.",
+      "more": "Details",
+      "hideAria": "Dismiss notification"
+    }
+  },
+  "help": {
+    "search": "Search the guide",
+    "noResults": "Nothing found",
+    "contents": "Contents",
+    "loadFailed": "Could not load the guide"
+  },
+  "support": {
+    "title": "Support the project",
+    "hint": "Glafira is free and open source; donations keep it going."
+  },
+  "menu": {
+    "help": "Help",
+    "guide": "Glafira Guide",
+    "about": "About Glafira"
+  },
+  "hints": {
+    "label": "Hint: {{name}}"
+  },
+  "sidebar": {
+    "settings": "Settings",
+    "help": "Help",
+    "about": "About",
+    "projects": "Load projects",
+    "openProject": "Open project…",
+    "newProject": "New project…",
+    "emptyHint": "Open a load project folder or create a new one.",
+    "remove": "Remove from the list",
+    "missing": "Folder not found",
+    "services": "Services",
+    "registry": "Operation registry",
+    "prodLoad": "Production load",
+    "profile": "Load profile",
+    "environments": "Environments"
+  },
+  "tabs": {
+    "settings": "Settings",
+    "about": "About",
+    "help": "Help",
+    "project": "{{name}}",
+    "newProject": "New project",
+    "service": "{{name}} · {{service}}",
+    "registry": "{{name}} · Registry",
+    "prodLoad": "{{name}} · Production load",
+    "profile": "{{name}} · Load profile"
+  },
+  "layout": {
+    "closeTab": "Close tab",
+    "empty": "Open a project on the left or create a new one."
+  }
+}
