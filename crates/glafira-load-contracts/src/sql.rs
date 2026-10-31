@@ -1,18 +1,50 @@
 //! SQL-миграции → справочник таблиц (спека L1 §5.2, решение плана 10 про Liquibase).
 //! Операций `sql` не создаёт: их задаёт человек, а таблицы нужны как подсказки.
 
-use sqlparser::ast::{AlterTableOperation, ColumnOption, Statement};
+use sqlparser::ast::{AlterTableOperation, ColumnOption, ObjectType, Statement};
 use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect, PostgreSqlDialect};
 use sqlparser::parser::Parser;
 
 use crate::{Column, ContractInput, ParseError, ParseOptions, ParseResult, Table};
 
-/// Разбивает текст на выражения по `;` вне кавычек (`'…'`, `"…"`), `$$ … $$` и комментариев
-/// (`-- …`, `/* … */`), с номером строки начала выражения (первый значащий символ).
+/// Символ, который может входить в идентификатор (для распознавания `$tag$`).
+fn is_ident_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
+/// Если с позиции `i` начинается разделитель долларовых кавычек (`$$` или `$tag$`),
+/// возвращает его целиком. Тег — `[A-Za-z_][A-Za-z0-9_]*`; `$1` и `a$b$` разделителями не считаются.
+fn dollar_delimiter(chars: &[char], i: usize) -> Option<Vec<char>> {
+    if chars.get(i) != Some(&'$') {
+        return None;
+    }
+    if i > 0 && (is_ident_char(chars[i - 1]) || chars[i - 1] == '$') {
+        return None;
+    }
+    let mut j = i + 1;
+    if let Some(&c) = chars.get(j)
+        && (c.is_ascii_alphabetic() || c == '_')
+    {
+        while chars.get(j).is_some_and(|&c| is_ident_char(c)) {
+            j += 1;
+        }
+    }
+    (chars.get(j) == Some(&'$')).then(|| chars[i..=j].to_vec())
+}
+
+/// Разбивает текст на выражения по `;` вне кавычек (`'…'` с экранированием `\'`, `"…"`, `` `…` ``),
+/// `$$ … $$` / `$tag$ … $tag$` и комментариев (`-- …`, `/* … */`), с номером строки начала
+/// выражения (первый значащий символ). Ведущий BOM отбрасывается.
+///
+/// Обратная косая в `'…'` всегда экранирует следующий символ (как в MySQL и `E'…'`); для строк
+/// PostgreSQL со стандартными правилами (`'C:\'`) это сознательное упрощение в пользу `'it\'s'`.
 fn split_statements(text: &str) -> Vec<(u32, String)> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut out = Vec::new();
     let (mut cur, mut start_line, mut line) = (String::new(), 1u32, 1u32);
-    let (mut in_quote, mut in_ident, mut in_dollar) = (false, false, false);
+    let (mut in_quote, mut in_ident) = (false, None::<char>);
+    // Открытый долларовый разделитель (`$$` или `$tag$`), которым надо закрыть строку.
+    let mut in_dollar: Option<Vec<char>> = None;
     let (mut in_comment, mut in_block) = (false, false);
     // Встретился ли в текущем выражении значащий (не пробел и не комментарий) символ.
     let mut started = false;
@@ -27,7 +59,8 @@ fn split_statements(text: &str) -> Vec<(u32, String)> {
             line += 1;
             in_comment = false;
         }
-        let plain = !in_quote && !in_ident && !in_dollar && !in_comment && !in_block;
+        let plain =
+            !in_quote && in_ident.is_none() && in_dollar.is_none() && !in_comment && !in_block;
         if in_block && c == '*' && next == Some('/') {
             // Конец блочного комментария: закрывающую пару переносим в текст целиком.
             cur.push_str("*/");
@@ -42,14 +75,43 @@ fn split_statements(text: &str) -> Vec<(u32, String)> {
             in_block = true;
             is_comment = true;
         } else if !is_comment {
-            if c == '\'' && !in_dollar && !in_ident {
+            if in_quote && c == '\\' {
+                // Экранированный символ внутри строки: пара не меняет состояние кавычек.
+                if let Some(n) = next {
+                    if n == '\n' {
+                        line += 1;
+                    }
+                    cur.push(c);
+                    cur.push(n);
+                    i += 2;
+                    continue;
+                }
+            } else if c == '\'' && in_dollar.is_none() && in_ident.is_none() {
                 in_quote = !in_quote;
-            } else if c == '"' && !in_dollar && !in_quote {
-                in_ident = !in_ident;
-            } else if c == '$' && next == Some('$') && !in_quote && !in_ident {
-                in_dollar = !in_dollar;
-                cur.push('$');
-                i += 1;
+            } else if (c == '"' || c == '`') && in_dollar.is_none() && !in_quote {
+                match in_ident {
+                    None => in_ident = Some(c),
+                    Some(q) if q == c => in_ident = None,
+                    Some(_) => {}
+                }
+            } else if c == '$' && !in_quote && in_ident.is_none() {
+                // Открытие `$tag$` или закрытие тем же разделителем; чужой `$…$` внутри — просто текст.
+                if let Some(d) = dollar_delimiter(&chars, i)
+                    && in_dollar.as_ref().is_none_or(|open| *open == d)
+                {
+                    if !started {
+                        started = true;
+                        start_line = line;
+                    }
+                    in_dollar = if in_dollar.is_some() {
+                        None
+                    } else {
+                        Some(d.clone())
+                    };
+                    cur.extend(d.iter());
+                    i += d.len();
+                    continue;
+                }
             }
         }
         if c == ';' && plain && !is_comment {
@@ -97,6 +159,24 @@ fn table_mut<'a>(tables: &'a mut Vec<Table>, name: &str) -> &'a mut Table {
     tables.last_mut().expect("just pushed")
 }
 
+/// Переименовывает таблицу; если такой нет — заводит пустую под новым именем (как `ADD COLUMN`).
+/// Прежняя таблица с новым именем (если была) затирается.
+fn rename_table(tables: &mut Vec<Table>, old: &str, new: &str) {
+    if old == new {
+        return;
+    }
+    match tables.iter().position(|t| t.name == old) {
+        Some(i) => {
+            tables.retain(|t| t.name != new);
+            let i = tables.iter().position(|t| t.name == old).unwrap_or(i);
+            tables[i].name = new.into();
+        }
+        None => {
+            table_mut(tables, new);
+        }
+    }
+}
+
 fn column_of(def: &sqlparser::ast::ColumnDef) -> Column {
     let nullable = !def.options.iter().any(|o| {
         matches!(
@@ -115,35 +195,91 @@ fn column_of(def: &sqlparser::ast::ColumnDef) -> Column {
     }
 }
 
-fn apply(stmt: &Statement, tables: &mut Vec<Table>) -> bool {
+/// Итог применения одного изменения к справочнику таблиц.
+#[derive(Debug, PartialEq, Eq)]
+enum Applied {
+    /// Изменение учтено в справочнике.
+    Handled,
+    /// Изменение затрагивает таблицы/колонки, но не поддержано: справочник может устареть.
+    Unsupported { kind: String, table: String },
+    /// Выражение не влияет на справочник таблиц (индексы, функции, DML, `COMMENT` и т.п.).
+    Irrelevant,
+}
+
+fn unsupported(kind: &str, table: &str) -> Applied {
+    Applied::Unsupported {
+        kind: kind.into(),
+        table: table.into(),
+    }
+}
+
+/// Предупреждение о неподдержанном изменении таблицы (общий формат для SQL и Liquibase).
+fn warn_unsupported(out: &mut ParseResult, path: &str, line: Option<u32>, kind: &str, table: &str) {
+    out.warn(
+        path,
+        line,
+        format!("unsupported table change: {kind} on {table}"),
+    );
+}
+
+/// Применяет выражение; результатов может быть несколько (`ALTER TABLE` с несколькими операциями).
+fn apply(stmt: &Statement, tables: &mut Vec<Table>) -> Vec<Applied> {
     match stmt {
         Statement::CreateTable(ct) => {
             let t = table_mut(tables, &ct.name.to_string());
             t.columns = ct.columns.iter().map(column_of).collect();
-            true
+            vec![Applied::Handled]
+        }
+        Statement::Drop {
+            object_type: ObjectType::Table,
+            names,
+            ..
+        } => {
+            for n in names {
+                let n = n.to_string();
+                tables.retain(|t| t.name != n);
+            }
+            vec![Applied::Handled]
+        }
+        // MySQL: `RENAME TABLE a TO b, c TO d`.
+        Statement::RenameTable(renames) => {
+            for r in renames {
+                rename_table(tables, &r.old_name.to_string(), &r.new_name.to_string());
+            }
+            vec![Applied::Handled]
         }
         Statement::AlterTable {
             name, operations, ..
         } => {
-            for op in operations {
-                match op {
+            let name = name.to_string();
+            operations
+                .iter()
+                .map(|op| match op {
                     AlterTableOperation::AddColumn { column_def, .. } => {
-                        table_mut(tables, &name.to_string())
-                            .columns
-                            .push(column_of(column_def))
+                        table_mut(tables, &name).columns.push(column_of(column_def));
+                        Applied::Handled
                     }
                     AlterTableOperation::DropColumn { column_names, .. } => {
-                        if let Some(t) = tables.iter_mut().find(|t| t.name == name.to_string()) {
+                        if let Some(t) = tables.iter_mut().find(|t| t.name == name) {
                             t.columns
                                 .retain(|c| !column_names.iter().any(|n| n.value == c.name));
                         }
+                        Applied::Handled
                     }
-                    _ => {}
-                }
-            }
-            true
+                    AlterTableOperation::RenameTable { table_name } => {
+                        rename_table(tables, &name, &table_name.to_string());
+                        Applied::Handled
+                    }
+                    AlterTableOperation::RenameColumn { .. } => unsupported("RENAME COLUMN", &name),
+                    AlterTableOperation::AlterColumn { .. } => unsupported("ALTER COLUMN", &name),
+                    AlterTableOperation::ChangeColumn { .. } => unsupported("CHANGE COLUMN", &name),
+                    AlterTableOperation::ModifyColumn { .. } => unsupported("MODIFY COLUMN", &name),
+                    // Ограничения, партиции и прочее на список таблиц и колонок не влияют.
+                    _ => Applied::Irrelevant,
+                })
+                .collect()
         }
-        _ => false,
+        _ => vec![Applied::Irrelevant],
     }
 }
 
@@ -152,7 +288,11 @@ fn parse_sql_text(text: &str, path: &str, out: &mut ParseResult) {
         match parse_one(&stmt) {
             Ok(statements) => {
                 for s in &statements {
-                    apply(s, &mut out.tables);
+                    for applied in apply(s, &mut out.tables) {
+                        if let Applied::Unsupported { kind, table } = applied {
+                            warn_unsupported(out, path, Some(line), &kind, &table);
+                        }
+                    }
                 }
             }
             Err(e) => out.warn(path, Some(line), format!("statement not parsed: {e}")),
@@ -203,6 +343,24 @@ fn parse_liquibase_xml(text: &str, path: &str, out: &mut ParseResult) -> Result<
                     t.columns.retain(|x| x.name != c);
                 }
             }
+            "dropTable" => {
+                let name = node.attribute("tableName").unwrap_or("");
+                out.tables.retain(|t| t.name != name);
+            }
+            "renameTable" => rename_table(
+                &mut out.tables,
+                node.attribute("oldTableName").unwrap_or(""),
+                node.attribute("newTableName").unwrap_or(""),
+            ),
+            kind @ ("renameColumn" | "modifyDataType") => warn_unsupported(
+                out,
+                path,
+                line,
+                kind,
+                node.attribute("tableName").unwrap_or(""),
+            ),
+            // Встроенный `<sql>` не разбираем: таблица заранее неизвестна.
+            "sql" => warn_unsupported(out, path, line, "sql", "<unknown>"),
             "include" | "includeAll" => out.warn(
                 path,
                 line,
@@ -233,6 +391,8 @@ pub fn parse(input: &ContractInput, _opts: &ParseOptions) -> Result<ParseResult,
         message: format!("not UTF-8: {e}"),
         line: None,
     })?;
+    // BOM перед первым выражением мешает и SQL-парсеру, и XML.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut out = ParseResult::default();
     let lower = input.path.to_ascii_lowercase();
     if lower.ends_with(".xml") {
@@ -365,5 +525,98 @@ mod tests {
             ["a", "b"]
         );
         assert_eq!(out.warnings[0].line, Some(3));
+    }
+
+    fn names(out: &ParseResult) -> Vec<&str> {
+        out.tables.iter().map(|t| t.name.as_str()).collect()
+    }
+
+    #[test]
+    fn drop_table_and_rename_table_update_the_list() {
+        let out = run(
+            "m.sql",
+            "CREATE TABLE a (x int);\nCREATE TABLE c (y int);\nDROP TABLE c;\nALTER TABLE a RENAME TO b;\nDROP TABLE IF EXISTS nope;",
+        );
+        assert_eq!(names(&out), ["b"]);
+        assert_eq!(cols(&out.tables[0]), vec![("x", "INT", true)]);
+        assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+    }
+
+    #[test]
+    fn unsupported_table_changes_warn_with_line() {
+        let out = run(
+            "m.sql",
+            "CREATE TABLE a (x int);\n\nALTER TABLE a ALTER COLUMN x TYPE text;",
+        );
+        assert_eq!(out.warnings.len(), 1, "{:?}", out.warnings);
+        assert_eq!(out.warnings[0].line, Some(3));
+        let m = &out.warnings[0].message;
+        assert!(
+            m.starts_with("unsupported table change:") && m.ends_with(" on a"),
+            "{m}"
+        );
+        let out = run(
+            "m.sql",
+            "CREATE TABLE a (x int);\nALTER TABLE a RENAME COLUMN x TO y;",
+        );
+        assert_eq!(out.warnings.len(), 1);
+        assert_eq!(out.warnings[0].line, Some(2));
+    }
+
+    #[test]
+    fn irrelevant_statements_do_not_warn() {
+        let out = run(
+            "m.sql",
+            "CREATE TABLE a (x int);\nCREATE INDEX i ON a (x);\nINSERT INTO a VALUES (1);\nUPDATE a SET x = 2;\nCOMMENT ON TABLE a IS 'c';\nTRUNCATE a;",
+        );
+        assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+        assert_eq!(names(&out), ["a"]);
+    }
+
+    #[test]
+    fn liquibase_drop_rename_and_unsupported_changes() {
+        let xml = r#"<databaseChangeLog>
+  <changeSet id="1" author="d">
+    <createTable tableName="a"><column name="id" type="int"/></createTable>
+    <createTable tableName="c"><column name="id" type="int"/></createTable>
+  </changeSet>
+  <changeSet id="2" author="d">
+    <dropTable tableName="c"/>
+    <renameTable oldTableName="a" newTableName="b"/>
+    <modifyDataType tableName="b" columnName="id" newDataType="bigint"/>
+  </changeSet>
+</databaseChangeLog>"#;
+        let out = run("changelog.xml", xml);
+        assert_eq!(names(&out), ["b"]);
+        assert_eq!(out.warnings.len(), 1, "{:?}", out.warnings);
+        assert_eq!(out.warnings[0].line, Some(9));
+        assert_eq!(
+            out.warnings[0].message,
+            "unsupported table change: modifyDataType on b"
+        );
+    }
+
+    #[test]
+    fn splitter_handles_tagged_dollar_quotes() {
+        let parts = split_statements("DO $BODY$ a; b $BODY$; SELECT 1;");
+        assert_eq!(parts.len(), 2, "{parts:?}");
+        assert!(parts[0].1.ends_with("$BODY$"));
+        let parts = split_statements("SELECT $do$ x; $$ y; $do$; SELECT $1;");
+        assert_eq!(parts.len(), 2, "{parts:?}");
+    }
+
+    #[test]
+    fn splitter_handles_backslash_quotes_and_backticks() {
+        let parts = split_statements("SELECT 'it\\'s; x'; SELECT E'a\\'b;c'; SELECT `a;b`;");
+        assert_eq!(parts.len(), 3, "{parts:?}");
+    }
+
+    #[test]
+    fn bom_prefixed_file_parses_first_statement() {
+        let out = run("m.sql", "\u{feff}CREATE TABLE a (id int);");
+        assert_eq!(names(&out), ["a"]);
+        assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+        let parts = split_statements("\u{feff}SELECT 1;");
+        assert_eq!(parts[0].1, "SELECT 1");
     }
 }
