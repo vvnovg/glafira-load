@@ -6,94 +6,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use glafira_load_model::registry::{
     Address, OpKind, OperationDraft, Source, SourceKind, Streaming,
 };
-use glafira_load_model::schema::{MAX_DEPTH, SchemaSummary};
+use glafira_load_model::schema::{MAX_CHILDREN, MAX_DEPTH, SchemaSummary};
+
+mod lexer;
+
+use lexer::{Tok, Token, lex};
 
 use crate::{ContractInput, ParseError, ParseOptions, ParseResult, dir_of, join_path};
-
-#[derive(Debug, Clone, PartialEq)]
-enum Tok {
-    Ident(String),
-    Str(String),
-    Num(String),
-    Punct(char),
-}
-
-struct Token {
-    tok: Tok,
-    line: u32,
-}
-
-fn lex(src: &str) -> Result<Vec<Token>, ParseError> {
-    let b = src.as_bytes();
-    let (mut i, mut line, mut out) = (0usize, 1u32, Vec::new());
-    while i < b.len() {
-        let c = b[i] as char;
-        if c == '\n' {
-            line += 1;
-            i += 1;
-        } else if c.is_whitespace() {
-            i += 1;
-        } else if src[i..].starts_with("//") {
-            while i < b.len() && b[i] != b'\n' {
-                i += 1;
-            }
-        } else if src[i..].starts_with("/*") {
-            let end = src[i + 2..]
-                .find("*/")
-                .map(|e| i + 2 + e + 2)
-                .unwrap_or(b.len());
-            line += src[i..end].matches('\n').count() as u32;
-            i = end;
-        } else if c.is_ascii_alphabetic() || c == '_' || c == '.' {
-            let start = i;
-            while i < b.len()
-                && ((b[i] as char).is_ascii_alphanumeric() || b[i] == b'_' || b[i] == b'.')
-            {
-                i += 1;
-            }
-            out.push(Token {
-                tok: Tok::Ident(src[start..i].into()),
-                line,
-            });
-        } else if c.is_ascii_digit() || c == '-' {
-            let start = i;
-            i += 1;
-            while i < b.len() && ((b[i] as char).is_ascii_alphanumeric() || b[i] == b'.') {
-                i += 1;
-            }
-            out.push(Token {
-                tok: Tok::Num(src[start..i].into()),
-                line,
-            });
-        } else if c == '"' || c == '\'' {
-            let start = i + 1;
-            i += 1;
-            while i < b.len() && b[i] as char != c {
-                if b[i] == b'\\' {
-                    i += 1;
-                }
-                i += 1;
-            }
-            out.push(Token {
-                tok: Tok::Str(src[start..i.min(b.len())].into()),
-                line,
-            });
-            i += 1;
-        } else if "{}()<>[]=;,:".contains(c) {
-            out.push(Token {
-                tok: Tok::Punct(c),
-                line,
-            });
-            i += 1;
-        } else {
-            return Err(ParseError {
-                message: format!("unexpected character {c:?}"),
-                line: Some(line),
-            });
-        }
-    }
-    Ok(out)
-}
 
 #[derive(Debug, Clone, Default)]
 struct Field {
@@ -135,6 +54,11 @@ struct File {
     services: Vec<Service>,
     warnings: Vec<(u32, String)>,
 }
+
+/// Ключевые слова, которые в теле `message` не поля и не из поддерживаемого подмножества.
+const UNSUPPORTED_IN_MESSAGE: &[&str] = &[
+    "extend", "group", "service", "rpc", "syntax", "package", "import", "edition",
+];
 
 struct Parser {
     toks: Vec<Token>,
@@ -210,6 +134,68 @@ impl Parser {
             }
         }
     }
+    /// Неизвестная конструкция: первый токен съедается всегда (прогресс), дальше — до `;` на
+    /// нулевой глубине или до конца первого `{ … }`. Закрывающая `}` объемлющего блока не
+    /// трогается. Пустая `;` после блока (`rpc X(A) returns (B) {};`) потом пропускается молча.
+    fn skip_construct(&mut self) {
+        let mut depth = 0i32;
+        let mut first = true;
+        loop {
+            if !first && depth == 0 && self.is_punct('}') {
+                return;
+            }
+            let Some(t) = self.next() else { return };
+            first = false;
+            match t {
+                Tok::Punct('{') | Tok::Punct('(') | Tok::Punct('[') => depth += 1,
+                Tok::Punct('}') => {
+                    depth -= 1;
+                    if depth <= 0 {
+                        return;
+                    }
+                }
+                Tok::Punct(')') | Tok::Punct(']') => depth -= 1,
+                Tok::Punct(';') if depth <= 0 => return,
+                _ => {}
+            }
+        }
+    }
+    /// Предупреждение `unsupported construct` для текущего токена и пропуск конструкции.
+    fn unsupported(&mut self) {
+        let line = self.line();
+        let what = match self.peek() {
+            Some(Tok::Ident(s)) | Some(Tok::Num(s)) => s.clone(),
+            Some(Tok::Str(s)) => format!("\"{s}\""),
+            Some(Tok::Punct(c)) => c.to_string(),
+            None => String::new(),
+        };
+        self.file
+            .warnings
+            .push((line, format!("unsupported construct '{what}'")));
+        self.skip_construct();
+    }
+    /// `true` на закрывающей `}` блока; конец файла внутри блока — ошибка.
+    fn block_end(&self, what: &str) -> Result<bool, ParseError> {
+        if self.peek().is_none() {
+            return Err(self.err(format!("unexpected end of file in {what}")));
+        }
+        Ok(self.is_punct('}'))
+    }
+    /// Следующие три токена — `Ident Ident =` (поле `type name = N`).
+    fn looks_like_field(&self) -> bool {
+        matches!(
+            (
+                self.toks.get(self.i).map(|t| &t.tok),
+                self.toks.get(self.i + 1).map(|t| &t.tok),
+                self.toks.get(self.i + 2).map(|t| &t.tok)
+            ),
+            (
+                Some(Tok::Ident(_)),
+                Some(Tok::Ident(_)),
+                Some(Tok::Punct('='))
+            )
+        )
+    }
     fn skip_field_options(&mut self) {
         if self.is_punct('[') {
             let mut depth = 0i32;
@@ -277,18 +263,18 @@ impl Parser {
                     self.next();
                     self.service()?;
                 }
-                Tok::Ident(w) if w == "extend" => {
-                    self.file
-                        .warnings
-                        .push((self.line(), "extend is not supported".into()));
-                    self.next();
-                    self.ident()?;
-                    self.skip_block();
-                }
                 Tok::Punct(';') => {
                     self.next();
                 }
-                other => return Err(self.err(format!("unexpected {other:?} at top level"))),
+                // Лишняя `}` на верхнем уровне: предупреждение и один токен.
+                Tok::Punct('}') => {
+                    self.file
+                        .warnings
+                        .push((self.line(), "unsupported construct '}'".into()));
+                    self.next();
+                }
+                // `edition`, `extend` и прочее вне подмножества.
+                _ => self.unsupported(),
             }
         }
         Ok(())
@@ -324,9 +310,13 @@ impl Parser {
                     self.next();
                     self.ident()?;
                     self.punct('{')?;
-                    while !self.is_punct('}') {
+                    while !self.block_end("oneof")? {
                         if self.is_ident("option") {
                             self.skip_statement();
+                        } else if self.is_punct(';') {
+                            self.next();
+                        } else if self.is_ident("group") || !self.looks_like_field() {
+                            self.unsupported();
                         } else {
                             msg.fields.push(self.field(false)?);
                         }
@@ -355,21 +345,22 @@ impl Parser {
                         map_value: Some(value),
                     });
                 }
-                Tok::Ident(w) if w == "group" => {
-                    self.file
-                        .warnings
-                        .push((self.line(), "group is not supported".into()));
-                    self.skip_statement();
-                }
+                // Конструкции вне подмножества (proto2 `group`, `extend`, чужие операторы).
+                Tok::Ident(w) if UNSUPPORTED_IN_MESSAGE.contains(&w.as_str()) => self.unsupported(),
                 Tok::Ident(w) if w == "repeated" || w == "optional" || w == "required" => {
                     self.next();
-                    msg.fields.push(self.field(w == "repeated")?);
+                    if self.is_ident("group") {
+                        self.unsupported();
+                    } else {
+                        msg.fields.push(self.field(w == "repeated")?);
+                    }
                 }
                 Tok::Ident(_) => msg.fields.push(self.field(false)?),
                 Tok::Punct(';') => {
                     self.next();
                 }
-                other => return Err(self.err(format!("unexpected {other:?} in message {name}"))),
+                // Строка, число, лишняя пунктуация: предупреждение и восстановление.
+                _ => self.unsupported(),
             }
         }
         self.punct('}')?;
@@ -396,9 +387,20 @@ impl Parser {
         let name = self.ident()?;
         self.punct('{')?;
         let mut values = Vec::new();
-        while !self.is_punct('}') {
+        while !self.block_end("enum")? {
             if self.is_ident("option") || self.is_ident("reserved") {
                 self.skip_statement();
+                continue;
+            }
+            if self.is_punct(';') {
+                self.next();
+                continue;
+            }
+            if !matches!(
+                (self.peek(), self.toks.get(self.i + 1).map(|t| &t.tok)),
+                (Some(Tok::Ident(_)), Some(Tok::Punct('=')))
+            ) {
+                self.unsupported();
                 continue;
             }
             let v = self.ident()?;
@@ -417,13 +419,18 @@ impl Parser {
         let name = self.ident()?;
         self.punct('{')?;
         let mut rpcs = Vec::new();
-        while !self.is_punct('}') {
+        while !self.block_end("service")? {
             if self.is_ident("option") {
                 self.skip_statement();
                 continue;
             }
+            if self.is_punct(';') {
+                self.next();
+                continue;
+            }
             if !self.is_ident("rpc") {
-                return Err(self.err("rpc expected in service"));
+                self.unsupported();
+                continue;
             }
             let line = self.line();
             self.next();
@@ -461,10 +468,14 @@ impl Parser {
 }
 
 fn parse_text(text: &str) -> Result<File, ParseError> {
+    let (toks, lex_warnings) = lex(text);
     let mut p = Parser {
-        toks: lex(text)?,
+        toks,
         i: 0,
-        file: File::default(),
+        file: File {
+            warnings: lex_warnings,
+            ..File::default()
+        },
     };
     p.file()?;
     Ok(p.file)
@@ -476,7 +487,8 @@ fn well_known(name: &str) -> Option<&'static str> {
         "google.protobuf.Timestamp"
         | "google.protobuf.Duration"
         | "google.protobuf.StringValue"
-        | "google.protobuf.BytesValue" => "string",
+        | "google.protobuf.BytesValue"
+        | "google.protobuf.FieldMask" => "string",
         "google.protobuf.Empty"
         | "google.protobuf.Any"
         | "google.protobuf.Struct"
@@ -529,77 +541,79 @@ fn resolve_type(name: &str, scope: &str, file: &File) -> Option<String> {
     }
 }
 
+/// Верхняя граница числа полей-узлов одной сводки: ширина на уровне (`MAX_CHILDREN`) и глубина
+/// (`MAX_DEPTH`) по отдельности не ограничивают сообщения, вложенные друг в друга ширококорневыми
+/// полями (`F^5` узлов). Когда бюджет исчерпан, сообщения-поля сворачиваются в пустой
+/// `object` с `truncated`.
+const MAX_NODES: usize = 10_000;
+
+/// Состояние построения одной сводки схемы.
+struct Ctx<'a> {
+    file: &'a File,
+    stack: Vec<String>,
+    unresolved: BTreeSet<String>,
+    nodes: usize,
+}
+
 fn type_summary(
+    ctx: &mut Ctx,
     name: &str,
     type_name: &str,
     scope: &str,
-    file: &File,
     depth: usize,
-    stack: &mut Vec<String>,
-    unresolved: &mut BTreeSet<String>,
 ) -> SchemaSummary {
+    if type_name.trim_start_matches('.') == "google.protobuf.ListValue" {
+        return SchemaSummary::array(name, SchemaSummary::leaf("items", "any"));
+    }
     if let Some(k) = scalar(type_name).or_else(|| well_known(type_name)) {
         return SchemaSummary::leaf(name, k);
     }
-    let Some(fq) = resolve_type(type_name, scope, file) else {
-        unresolved.insert(type_name.to_string());
+    let Some(fq) = resolve_type(type_name, scope, ctx.file) else {
+        ctx.unresolved.insert(type_name.to_string());
         return SchemaSummary::leaf(name, format!("unresolved:{type_name}"));
     };
-    if let Some(values) = file.enums.get(&fq) {
+    if let Some(values) = ctx.file.enums.get(&fq) {
         let mut s = SchemaSummary::leaf(name, "enum");
         s.enum_values = values.clone();
         return s;
     }
-    if stack.contains(&fq) {
+    if ctx.stack.contains(&fq) {
         return SchemaSummary::leaf(
             name,
             format!("ref:{}", fq.rsplit('.').next().unwrap_or(&fq)),
         );
     }
-    message_summary(name, &fq, file, depth, stack, unresolved)
+    if ctx.nodes >= MAX_NODES {
+        let mut s = SchemaSummary::object(name, vec![]);
+        s.truncated = true;
+        return s;
+    }
+    message_summary(ctx, name, &fq, depth)
 }
 
-fn message_summary(
-    name: &str,
-    fq: &str,
-    file: &File,
-    depth: usize,
-    stack: &mut Vec<String>,
-    unresolved: &mut BTreeSet<String>,
-) -> SchemaSummary {
+fn message_summary(ctx: &mut Ctx, name: &str, fq: &str, depth: usize) -> SchemaSummary {
     let mut out = SchemaSummary::object(name, vec![]);
     if depth >= MAX_DEPTH {
         out.truncated = true;
         return out;
     }
-    let Some(msg) = file.messages.get(fq) else {
+    let Some(msg) = ctx.file.messages.get(fq) else {
         return out;
     };
-    stack.push(fq.to_string());
+    ctx.stack.push(fq.to_string());
     for f in &msg.fields {
+        if out.children.len() >= MAX_CHILDREN {
+            out.truncated = true;
+            break;
+        }
+        ctx.nodes += 1;
         let child = match &f.map_value {
             Some(v) => {
                 let mut m = SchemaSummary::leaf(&f.name, "map");
-                m.children = vec![type_summary(
-                    "value",
-                    v,
-                    fq,
-                    file,
-                    depth + 1,
-                    stack,
-                    unresolved,
-                )];
+                m.children = vec![type_summary(ctx, "value", v, fq, depth + 1)];
                 m
             }
-            None => type_summary(
-                &f.name,
-                &f.type_name,
-                fq,
-                file,
-                depth + 1,
-                stack,
-                unresolved,
-            ),
+            None => type_summary(ctx, &f.name, &f.type_name, fq, depth + 1),
         };
         out.children.push(if f.repeated {
             SchemaSummary::array(&f.name, child)
@@ -607,7 +621,7 @@ fn message_summary(
             child
         });
     }
-    stack.pop();
+    ctx.stack.pop();
     out
 }
 
@@ -664,7 +678,12 @@ pub fn parse(input: &ContractInput, opts: &ParseOptions) -> Result<ParseResult, 
     let mut out = ParseResult::default();
     let mut visited = BTreeSet::from([input.path.to_string()]);
     let file = load(input.path, input.bytes, input, opts, &mut visited, &mut out)?;
-    let mut unresolved = BTreeSet::new();
+    let mut ctx = Ctx {
+        file: &file,
+        stack: Vec::new(),
+        unresolved: BTreeSet::new(),
+        nodes: 0,
+    };
     for svc in &file.services {
         let service_fq = Parser::fq(&file.package, &svc.name);
         for rpc in &svc.rpcs {
@@ -682,25 +701,11 @@ pub fn parse(input: &ContractInput, opts: &ParseOptions) -> Result<ParseResult, 
                 },
             );
             draft.name = rpc.name.clone();
-            let mut stack = Vec::new();
-            let mut req = type_summary(
-                "request",
-                &rpc.request,
-                &file.package,
-                &file,
-                1,
-                &mut stack,
-                &mut unresolved,
-            );
-            let mut resp = type_summary(
-                "response",
-                &rpc.response,
-                &file.package,
-                &file,
-                1,
-                &mut stack,
-                &mut unresolved,
-            );
+            ctx.stack.clear();
+            ctx.nodes = 0;
+            let mut req = type_summary(&mut ctx, "request", &rpc.request, &file.package, 1);
+            ctx.nodes = 0;
+            let mut resp = type_summary(&mut ctx, "response", &rpc.response, &file.package, 1);
             req.limit();
             resp.limit();
             draft.request = Some(req);
@@ -714,7 +719,7 @@ pub fn parse(input: &ContractInput, opts: &ParseOptions) -> Result<ParseResult, 
             out.operations.push(draft);
         }
     }
-    for t in unresolved {
+    for t in ctx.unresolved {
         out.warn(input.path, None, format!("type not found: {t}"));
     }
     Ok(out)
@@ -869,5 +874,202 @@ mod tests {
             child(out.operations[0].request.as_ref().unwrap(), "next").kind,
             "ref:Node"
         );
+    }
+
+    fn run(src: &str) -> ParseResult {
+        let read = |_: &str| None;
+        parse(
+            &ContractInput {
+                path: "a.proto",
+                bytes: src.as_bytes(),
+                read: &read,
+            },
+            &opts(),
+        )
+        .unwrap()
+    }
+
+    fn count_nodes(s: &SchemaSummary) -> usize {
+        1 + s.children.iter().map(count_nodes).sum::<usize>()
+    }
+
+    fn max_width(s: &SchemaSummary) -> usize {
+        s.children
+            .iter()
+            .map(max_width)
+            .max()
+            .unwrap_or(0)
+            .max(s.children.len())
+    }
+
+    #[test]
+    fn bom_unknown_constructs_and_stray_semicolons_are_warnings() {
+        let src = "\u{feff}syntax = \"proto3\";\nedition = \"2023\";\npackage t;\n\
+                   enum E {\n  A = 0;;\n  B = 1;\n}\n\
+                   service S {\n  rpc Do(M) returns (M) {};\n  ;\n  frobnicate X;\n  rpc Two(M) returns (M);\n}\n\
+                   message M { string x = 1; }\n";
+        let out = run(src);
+        let ops: Vec<&str> = out.operations.iter().map(|o| o.id.as_str()).collect();
+        assert_eq!(
+            ops,
+            ["grpc:orders:t.S/Do", "grpc:orders:t.S/Two"],
+            "{:?}",
+            out.warnings
+        );
+        assert_eq!(out.operations[0].source.line, Some(9));
+        let edition = out
+            .warnings
+            .iter()
+            .find(|w| w.message.contains("edition"))
+            .unwrap_or_else(|| panic!("{:?}", out.warnings));
+        assert_eq!(edition.line, Some(2));
+        let frob = out
+            .warnings
+            .iter()
+            .find(|w| w.message.contains("frobnicate"))
+            .unwrap();
+        assert_eq!(frob.line, Some(11));
+        assert_eq!(out.warnings.len(), 2, "пустые `;` — без предупреждений");
+    }
+
+    #[test]
+    fn exponents_and_exotic_punctuation_lex_fine() {
+        let src = "syntax = \"proto3\";\npackage t;\n\
+                   option (a.b) = 1e+10;\noption (a.c) = 2E-3;\n\
+                   option (x) = { url: [type.googleapis.com/foo.Bar] mask: a|b at: @c };\n\
+                   message M {\n  string id = 1 [(google.api.http) = {get: \"/v1/x/{id}\" body: '*'}, (v) = 1e+5];\n  int32 n = 2;\n}\n\
+                   service S { rpc Do(M) returns (M) { option (google.api.http) = { get: \"/v1/x/{id}\" }; } }\n";
+        let out = run(src);
+        assert_eq!(out.warnings, vec![], "{:?}", out.warnings);
+        let req = out.operations[0].request.as_ref().unwrap();
+        assert_eq!(
+            req.children
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            ["id", "n"]
+        );
+    }
+
+    #[test]
+    fn unsupported_construct_in_message_warns_and_parsing_continues() {
+        let src = "syntax = \"proto3\";\npackage t;\nmessage M {\n  string a = 1;\n  extend Foo {\n    int32 z = 100;\n  }\n  optional group G = 2 {\n    string q = 3;\n  }\n  string b = 4;\n}\nservice S { rpc Do(M) returns (M); }\n";
+        let out = run(src);
+        let req = out.operations[0].request.as_ref().unwrap();
+        assert_eq!(
+            req.children
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+        let lines: Vec<(Option<u32>, &str)> = out
+            .warnings
+            .iter()
+            .map(|w| (w.line, w.message.as_str()))
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                (Some(5), "unsupported construct 'extend'"),
+                (Some(8), "unsupported construct 'group'")
+            ]
+        );
+    }
+
+    #[test]
+    fn strings_keep_line_numbers_and_unterminated_string_warns() {
+        let src = "syntax = \"proto3\";\noption (x) = \"multi\nline \\\n cont\";\nmessage M { string a = 1; }\nservice S { rpc Do(M) returns (M); }\n";
+        let out = run(src);
+        assert_eq!(out.operations[0].source.line, Some(6), "{:?}", out.warnings);
+        let out =
+            run("syntax = \"proto3\";\nmessage M { string a = 1; }\noption (x) = \"oops;\nmore");
+        assert!(
+            out.warnings
+                .iter()
+                .any(|w| w.line == Some(3) && w.message.contains("unterminated")),
+            "{:?}",
+            out.warnings
+        );
+    }
+
+    #[test]
+    fn wide_message_is_truncated_at_max_children() {
+        let mut src = String::from("syntax = \"proto3\"; message Big {\n");
+        for i in 0..250 {
+            src.push_str(&format!("  string f{i} = {};\n", i + 1));
+        }
+        src.push_str("}\nservice S { rpc Do(Big) returns (Big); }\n");
+        let out = run(&src);
+        let req = out.operations[0].request.as_ref().unwrap();
+        assert_eq!(req.kind, "object");
+        assert_eq!(req.children.len(), 200);
+        assert!(req.truncated);
+        let mut exact = String::from("syntax = \"proto3\"; message Big {\n");
+        for i in 0..200 {
+            exact.push_str(&format!("  string f{i} = {};\n", i + 1));
+        }
+        exact.push_str("}\nservice S { rpc Do(Big) returns (Big); }\n");
+        let out = run(&exact);
+        let req = out.operations[0].request.as_ref().unwrap();
+        assert_eq!((req.children.len(), req.truncated), (200, false));
+    }
+
+    #[test]
+    fn wide_nested_messages_do_not_blow_up() {
+        let mut src = String::from("syntax = \"proto3\";\n");
+        for level in 1..=6 {
+            let name = if level == 1 {
+                "W".to_string()
+            } else {
+                format!("W{level}")
+            };
+            src.push_str(&format!("message {name} {{\n"));
+            for i in 0..30 {
+                if level < 6 {
+                    src.push_str(&format!("  W{} f{i} = {};\n", level + 1, i + 1));
+                } else {
+                    src.push_str(&format!("  string f{i} = {};\n", i + 1));
+                }
+            }
+            src.push_str("}\n");
+        }
+        src.push_str("service S { rpc Do(W) returns (W); }\n");
+        let started = std::time::Instant::now();
+        let out = run(&src);
+        assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
+        for s in [
+            out.operations[0].request.as_ref().unwrap(),
+            out.operations[0].response.as_ref().unwrap(),
+        ] {
+            assert!(max_width(s) <= 200);
+            let n = count_nodes(s);
+            assert!(n < 50_000, "{n} nodes");
+            assert!(n > 100, "{n} nodes");
+        }
+    }
+
+    #[test]
+    fn client_and_bidi_streaming_and_extra_well_known_types() {
+        let src = "syntax = \"proto3\"; package t;\nmessage M { google.protobuf.ListValue l = 1; google.protobuf.FieldMask m = 2; }\nservice S {\n  rpc Up(stream M) returns (M);\n  rpc Chat(stream M) returns (stream M);\n  rpc Down(M) returns (stream M);\n}\n";
+        let out = run(src);
+        assert_eq!(
+            out.operations
+                .iter()
+                .map(|o| o.streaming)
+                .collect::<Vec<_>>(),
+            [
+                Some(Streaming::Client),
+                Some(Streaming::Bidi),
+                Some(Streaming::Server)
+            ]
+        );
+        let req = out.operations[0].request.as_ref().unwrap();
+        let l = child(req, "l");
+        assert_eq!(
+            (l.kind.as_str(), l.children[0].kind.as_str()),
+            ("array", "any")
+        );
+        assert_eq!(child(req, "m").kind, "string");
     }
 }
