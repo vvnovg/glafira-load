@@ -78,7 +78,7 @@ macro_rules! app_err {
 }
 
 impl LocalizedText {
-    /// Технический текст как есть (сообщение брокера/librdkafka, ошибка парсера и т. п.):
+    /// Технический текст как есть (сообщение git, ошибка парсера контракта и т. п.):
     /// не переводится, показывается через `errors.generic` (`{{message}}`). Только для текста,
     /// который нельзя перевести; фразы приложения — всегда через `ltext!` / `app_err!` с ключом.
     pub fn raw(text: impl Into<String>) -> Self {
@@ -94,14 +94,14 @@ mod tests {
     #[test]
     fn render_substitutes_params() {
         let mut p = BTreeMap::new();
-        p.insert("name".to_string(), "prod-1".to_string());
+        p.insert("name".to_string(), "orders".to_string());
         assert_eq!(
-            render("Connection “{{name}}” is read-only", &p),
-            "Connection “prod-1” is read-only"
+            render("Project “{{name}}” is read-only", &p),
+            "Project “orders” is read-only"
         );
         assert_eq!(
             render("{{ name }} and {{missing}}", &p),
-            "prod-1 and {{missing}}"
+            "orders and {{missing}}"
         );
         assert_eq!(render("tail {{name", &p), "tail {{name");
     }
@@ -115,31 +115,38 @@ mod tests {
         let e = app_err!(
             ErrorCode::NotFound,
             "errors.project.notFound",
-            "Project “{{name}}” not found",
-            name = "p"
+            "No {{file}} in {{path}}",
+            file = "glafira-load.yaml",
+            path = "/p"
         );
         assert_eq!(e.code, ErrorCode::NotFound);
-        assert_eq!(e.message, "Project “p” not found");
+        assert_eq!(e.message, "No glafira-load.yaml in /p");
         let json = serde_json::to_value(&e).unwrap();
         assert_eq!(json["key"], "errors.project.notFound");
-        assert_eq!(json["params"]["name"], "p");
+        assert_eq!(json["params"]["file"], "glafira-load.yaml");
     }
 
     #[test]
     fn raw_text_and_error_text() {
-        let t = LocalizedText::raw("Broker: Unknown topic");
+        let t = LocalizedText::raw("openapi.yaml: line 3: mapping values are not allowed");
         assert_eq!(t.key, "errors.generic");
-        assert_eq!(t.params["message"], "Broker: Unknown topic");
-        assert_eq!(t.text, "Broker: Unknown topic");
+        assert_eq!(
+            t.params["message"],
+            "openapi.yaml: line 3: mapping values are not allowed"
+        );
+        assert_eq!(
+            t.text,
+            "openapi.yaml: line 3: mapping values are not allowed"
+        );
         let e = app_err!(
             ErrorCode::NotFound,
-            "errors.topics.notFound",
-            "Topic “{{topic}}” not found",
-            topic = "t"
+            "errors.project.noService",
+            "Service {{id}} is not in the manifest",
+            id = "orders"
         );
         let t = e.text();
-        assert_eq!(t.key, "errors.topics.notFound");
-        assert_eq!(t.params["topic"], "t");
+        assert_eq!(t.key, "errors.project.noService");
+        assert_eq!(t.params["id"], "orders");
         assert_eq!(t.text, e.message);
     }
 }

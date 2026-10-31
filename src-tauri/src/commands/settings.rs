@@ -14,7 +14,7 @@ fn current(st: &AppState) -> LanguageSettings {
     )
 }
 
-/// Блокирующая часть `set_language` (запись файла). Лицензия не проверяется: все языки бесплатны.
+/// Блокирующая часть `set_language` (запись файла); язык, заданный политикой, не меняется.
 fn apply_language(st: &AppState, lang: Option<&str>) -> AppResult<LanguageSettings> {
     if st.policy.status.language.is_some() {
         return Err(app_err!(

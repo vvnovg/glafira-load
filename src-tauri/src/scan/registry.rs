@@ -34,7 +34,7 @@ impl ScanRegistry {
             return Err(app_err!(
                 ErrorCode::ScanBusy,
                 "errors.scan.busy",
-                "This service is already being scanned"
+                "A scan is already running in this project"
             ));
         }
         let flag = Arc::new(AtomicBool::new(false));

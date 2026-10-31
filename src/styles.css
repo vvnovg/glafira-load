@@ -164,31 +164,8 @@ label.inline { display: inline-flex; gap: 4px; align-items: center; white-space:
 .help-content pre code { padding: 0; background: none; }
 .help-content a { color: var(--accent); }
 
-/* Проверка кластера и замечания (G2) */
+/* Пометки строк реестра (дифф разборов) */
 .sev { font-size: 11px; line-height: 1; white-space: nowrap; }
-.sev-critical { color: var(--danger); }
-.sev-warning { color: var(--warn); }
-.sev-info { color: var(--accent); }
-.sev-count { margin-left: 2px; color: var(--fg); font-size: 11px; }
-.check-bar { display: flex; flex-direction: column; gap: 4px; }
-.check-bar p { margin: 0; }
-.check-bar-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.check-bar-count { margin-left: 8px; }
-.finding-group { border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; margin-bottom: 6px; }
-.finding-group > summary { cursor: pointer; padding: 4px 0; }
-.finding-list { list-style: none; margin: 0; padding: 0; }
-.finding { padding: 6px 0; border-top: 1px solid var(--border); }
-.finding:first-child { border-top: none; }
-.finding p { margin: 2px 0; }
-.finding-head { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
-.finding-actions { display: flex; gap: 12px; }
-.finding.is-hidden, .finding.is-closed { opacity: 0.65; }
-.note-body { white-space: pre-wrap; overflow-wrap: anywhere; }
-.proposal-change { overflow-wrap: anywhere; }
-.proposal-reject { display: inline-flex; gap: 8px; align-items: center; }
-.health-badge { margin-left: 4px; }
-.health-block { border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
-.health-block h3 { margin: 0 0 4px; font-size: 14px; }
 
 /* Дерево проектов и вкладка «Проект» */
 .tree > li.tree-folder { display: block; }
