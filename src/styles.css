@@ -203,3 +203,23 @@ button.tree-name { text-align: left; }
 input:invalid { border-color: var(--danger); }
 .page > .notice { flex-direction: column; align-items: flex-start; border: 1px solid var(--warn); border-radius: 6px; }
 .notice ul, .scan-results { margin: 0; padding-left: 20px; }
+
+/* Реестр операций */
+.registry-body { display: flex; gap: 12px; min-height: 260px; height: max(260px, calc(100vh - 280px)); }
+.registry-body .vlist { flex: 1; overflow: auto; border: 1px solid var(--border); }
+.registry-body .details-pane { width: 42%; overflow: auto; }
+.msg-row { display: grid; grid-template-columns: 1fr auto auto auto auto; gap: 8px; align-items: center; padding: 0 8px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.msg-row > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-row.active { background: color-mix(in srgb, var(--accent) 15%, transparent); }
+.msg-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.diff-added { border-left: 3px solid #16a34a; }
+.diff-removed { border-left: 3px solid #8a8f98; }
+.diff-changed { border-left: 3px solid #f59e0b; }
+.sev-added { color: #16a34a; }
+.sev-removed { color: var(--muted); }
+.sev-changed { color: var(--warn); }
+.schema-tree ul { margin: 0 0 0 16px; padding: 0; list-style: none; }
+.schema-tree { margin: 0; padding: 0; list-style: none; }
+.scan-list { margin: 0; padding-left: 20px; }
+.registry-form { display: flex; flex-direction: column; align-items: stretch; max-width: 760px; }
+button.danger { color: #dc2626; }

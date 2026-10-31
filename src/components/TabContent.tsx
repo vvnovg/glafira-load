@@ -4,6 +4,7 @@ import type { Tab } from "../state/workspace";
 import { AboutPanel } from "./about/AboutPanel";
 import { ChunkBoundary } from "./common/ChunkBoundary";
 import { ProjectPanel } from "./project/ProjectPanel";
+import { RegistryPanel } from "./registry/RegistryPanel";
 import { ServicePanel } from "./services/ServicePanel";
 import { SettingsPanel } from "./settings/SettingsPanel";
 
@@ -34,8 +35,10 @@ export function TabContent({ tab }: { tab: Tab }) {
       return <ProjectPanel path={tab.path} />;
     case "service":
       return <ServicePanel path={tab.path} serviceId={tab.serviceId} />;
+    case "registry":
+      return <RegistryPanel path={tab.path} />;
     default:
-      // Остальные экраны проекта появляются в Tasks 16–19.
+      // Остальные экраны проекта появляются в Tasks 18–19.
       return <p className="empty">{t("common.loading")}</p>;
   }
 }

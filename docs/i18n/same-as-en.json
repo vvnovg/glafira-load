@@ -1,5 +1,8 @@
 {
   "ru": [
-    "errors.generic"
+    "errors.generic",
+    "registry.kinds.grpc",
+    "registry.kinds.http",
+    "registry.kinds.sql"
   ]
 }

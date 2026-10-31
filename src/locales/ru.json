@@ -148,6 +148,9 @@
     "service": {
       "contracts": "OpenAPI/Swagger, Protobuf, AsyncAPI, Avro и JSON Schema, миграции Flyway/Liquibase, контроллеры Spring. Каждый файл разбирается отдельно: ошибка в одном не останавливает остальные.",
       "kafka": "Топик → файл схемы (относительно папки сервиса). Направление необязательно: по умолчанию берётся из операции AsyncAPI или аннотации Spring."
+    },
+    "registry": {
+      "title": "Каждая операция тестируемой системы со схемами запроса и ответа. Повторный разбор сливает изменения; ручные поля сохраняются."
     }
   },
   "sidebar": {
@@ -257,5 +260,80 @@
     "addTopic": "Добавить топик",
     "openScan": "Открыть снимок разбора",
     "openRegistry": "Открыть реестр"
+  },
+  "registry": {
+    "title": "Реестр операций",
+    "search": "Поиск по id или имени",
+    "service": "Сервис",
+    "anyService": "Все сервисы",
+    "kind": "Вид",
+    "anyKind": "Все виды",
+    "sourceLabel": "Источник",
+    "anySource": "Все источники",
+    "statusLabel": "Статус",
+    "anyStatus": "Все статусы",
+    "status": {
+      "active": "активна",
+      "removed": "удалена"
+    },
+    "kinds": {
+      "http": "HTTP",
+      "kafka_produce": "Kafka: отправка",
+      "kafka_consume": "Kafka: чтение",
+      "grpc": "gRPC",
+      "sql": "SQL"
+    },
+    "diffToggle": "Дифф с прошлым разбором",
+    "diffBetween": "Изменения между {{from}} и {{to}}",
+    "diffFrom": "Сравнить от",
+    "diffTo": "Сравнить до",
+    "marks": {
+      "added": "новая",
+      "removed": "удалена",
+      "changed": "изменена"
+    },
+    "addManual": "Добавить вручную",
+    "count_one": "Операций: {{count}}",
+    "count_few": "Операций: {{count}}",
+    "count_many": "Операций: {{count}}",
+    "count_other": "Операций: {{count}}",
+    "empty": "Операций нет: разберите сервис или добавьте вручную",
+    "required": "обязательное",
+    "truncated": "(обрезано)",
+    "method": "Метод",
+    "path": "Путь",
+    "topic": "Топик",
+    "grpcService": "gRPC-сервис (package.Service)",
+    "grpcMethod": "Метод",
+    "sqlName": "Имя операции",
+    "name": "Имя",
+    "summary": "Описание",
+    "idPreview": "Идентификатор:",
+    "invalid": {
+      "empty": "Заполните поле: {{field}}",
+      "noSpaces": "Пробелы недопустимы в поле: {{field}}",
+      "pathSlash": "Путь должен начинаться с /"
+    },
+    "streaming": "стриминг: {{mode}}",
+    "topicGuessed": "топик угадан по имени файла",
+    "source": "Источник: {{kind}}",
+    "seen": "Впервые в {{first}}, последний раз в {{last}} ({{at}})",
+    "request": "Запрос",
+    "response": "Ответ",
+    "responseCode": "Ответ {{code}}",
+    "manual": "Ручные поля",
+    "tags": "Теги (через запятую)",
+    "owner": "Владелец",
+    "notes": "Заметки",
+    "deleteConfirm": "Удалить операцию {{id}} из реестра?",
+    "deleteRemoved": "Удалить из реестра",
+    "scans_one": "Разборов: {{count}}",
+    "scans_few": "Разборов: {{count}}",
+    "scans_many": "Разборов: {{count}}",
+    "scans_other": "Разборов: {{count}}",
+    "scanCounts": "добавлено {{added}}, изменено {{changed}}, удалено {{removed}}, восстановлено {{restored}}",
+    "tables": "Таблицы из миграций",
+    "noTables": "Таблиц нет: разберите сервис с SQL-миграциями",
+    "notNull": "не может быть NULL"
   }
 }

@@ -148,6 +148,9 @@
     "service": {
       "contracts": "OpenAPI/Swagger, Protobuf, AsyncAPI, Avro and JSON Schema, Flyway/Liquibase migrations, Spring controllers. Each file is parsed on its own: an error in one does not stop the rest.",
       "kafka": "Topic to schema file (relative to the service folder). Direction is optional: by default it is taken from the AsyncAPI operation or the Spring annotation."
+    },
+    "registry": {
+      "title": "Every operation of the system under test with its request and response schemas. Rescanning merges changes; manual fields survive."
     }
   },
   "sidebar": {
@@ -257,5 +260,76 @@
     "addTopic": "Add topic",
     "openScan": "Open scan snapshot",
     "openRegistry": "Open registry"
+  },
+  "registry": {
+    "title": "Operation registry",
+    "search": "Search by id or name",
+    "service": "Service",
+    "anyService": "All services",
+    "kind": "Kind",
+    "anyKind": "All kinds",
+    "sourceLabel": "Source",
+    "anySource": "All sources",
+    "statusLabel": "Status",
+    "anyStatus": "All statuses",
+    "status": {
+      "active": "active",
+      "removed": "removed"
+    },
+    "kinds": {
+      "http": "HTTP",
+      "kafka_produce": "Kafka produce",
+      "kafka_consume": "Kafka consume",
+      "grpc": "gRPC",
+      "sql": "SQL"
+    },
+    "diffToggle": "Diff with the previous scan",
+    "diffBetween": "Changes between {{from}} and {{to}}",
+    "diffFrom": "Compare from",
+    "diffTo": "Compare to",
+    "marks": {
+      "added": "new",
+      "removed": "removed",
+      "changed": "changed"
+    },
+    "addManual": "Add manually",
+    "count_one": "Operations: {{count}}",
+    "count_other": "Operations: {{count}}",
+    "empty": "No operations: scan a service or add one manually",
+    "required": "required",
+    "truncated": "(truncated)",
+    "method": "Method",
+    "path": "Path",
+    "topic": "Topic",
+    "grpcService": "gRPC service (package.Service)",
+    "grpcMethod": "Method",
+    "sqlName": "Operation name",
+    "name": "Name",
+    "summary": "Description",
+    "idPreview": "ID:",
+    "invalid": {
+      "empty": "Fill in the field: {{field}}",
+      "noSpaces": "No spaces allowed in: {{field}}",
+      "pathSlash": "The path must start with /"
+    },
+    "streaming": "streaming: {{mode}}",
+    "topicGuessed": "topic guessed from the file name",
+    "source": "Source: {{kind}}",
+    "seen": "First seen in {{first}}, last in {{last}} ({{at}})",
+    "request": "Request",
+    "response": "Response",
+    "responseCode": "Response {{code}}",
+    "manual": "Manual fields",
+    "tags": "Tags (comma-separated)",
+    "owner": "Owner",
+    "notes": "Notes",
+    "deleteConfirm": "Delete operation {{id}} from the registry?",
+    "deleteRemoved": "Delete from the registry",
+    "scans_one": "Scans: {{count}}",
+    "scans_other": "Scans: {{count}}",
+    "scanCounts": "added {{added}}, changed {{changed}}, removed {{removed}}, restored {{restored}}",
+    "tables": "Tables from migrations",
+    "noTables": "No tables found: scan a service with SQL migrations",
+    "notNull": "NOT NULL"
   }
 }
