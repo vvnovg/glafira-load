@@ -4,23 +4,20 @@ This chapter covers updating the app, the [[ui:sidebar.about]] screen and suppor
 
 ## Updates {#updates}
 
-At startup, the app checks once whether a new version is available. If it is, a notice with the version number appears above the tabs. The [[ui:about.notice.more]] link opens the [[ui:sidebar.about]] screen. If the check fails, for example without internet access, nothing is shown.
+Updates from inside the app come in a later version: the installers of this version are not signed for automatic
+updates yet. Until then, download new versions from the releases page and install them over the old one:
+https://github.com/vvnovg/glafira-load-releases/releases
 
-To check manually:
+Your projects stay in their own folders, and the settings of the app are kept when you install a new version.
 
-1. Open [[ui:sidebar.about]] at the bottom of the left panel.
-2. In the [[ui:about.updates.title]] section, click [[ui:about.updates.check]].
-3. If a new version is available, the screen shows its number and the description of the changes. Click [[ui:about.updates.install]].
+The [[ui:about.updates.title]] section of the [[ui:sidebar.about]] screen is already there. In this version,
+[[ui:about.updates.check]] answers "[[ui:errors.updates.notConfigured]]", and the app makes no request to the update
+server. When updates are turned on, the app will check once at startup and show a notice above the tabs if a new
+version is available.
 
-The app downloads the update, verifies its signature, installs it and restarts. If a network failure interrupts the download, it is retried automatically, up to three attempts in total. If all three attempts fail, the app reports: "[[ui:errors.updates.downloadInterrupted]]". If the signature fails verification, the app reports: "[[ui:errors.updates.badSignature]]".
-
-Installing may ask for an administrator password, because the app is installed for all users of the computer: by the `.pkg` installer on macOS, the `.msi` installer on Windows, or a `.deb` or `.rpm` package on Linux. Users without administrator rights cannot update such an installation.
-
-Your projects stay in their own folders; the settings and other data of the app are kept after the update.
-
-Updates are downloaded from the releases page on GitHub. If the check ends with "[[ui:errors.updates.checkFailed]]", check your network or proxy. "[[ui:errors.updates.notConfigured]]" means that the build was made without the update key, for example a development or test build. In that case, download new versions from the releases page: https://github.com/vvnovg/glafira-load-releases/releases
-
-Your organization may turn off the update check with a policy or point it to an internal mirror. When the check is off, "[[ui:errors.updates.managed]]" appears in the [[ui:about.updates.title]] section after you click [[ui:about.updates.check]]. Like "[[ui:errors.updates.notConfigured]]", this message is shown only after the click: the check at startup shows nothing in such cases.
+Your organization can turn off the update check with the `updatesEnabled` policy or point it to an internal mirror with
+`updateUrl`. When the check is off, [[ui:about.updates.check]] answers "[[ui:errors.updates.managed]]" and the app never
+contacts the update server.
 
 ## About {#about}
 
