@@ -1,6 +1,8 @@
 //! Модель файлов проекта НТ: типы и чистые функции без I/O (спека L1 §3, §6–§8).
 //! Диск читает и пишет приложение; раннер (L2) использует те же типы.
 
+pub mod diff;
+pub mod merge;
 pub mod project;
 pub mod registry;
 pub mod schema;
