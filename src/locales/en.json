@@ -151,6 +151,9 @@
     },
     "registry": {
       "title": "Every operation of the system under test with its request and response schemas. Rescanning merges changes; manual fields survive."
+    },
+    "prodLoad": {
+      "title": "The template is an .xlsx with locked IDs. The production team fills in the figures; import matches rows by ID and shows the diff before writing load/prod-load.yaml."
     }
   },
   "sidebar": {
@@ -331,5 +334,74 @@
     "tables": "Tables from migrations",
     "noTables": "No tables found: scan a service with SQL migrations",
     "notNull": "NOT NULL"
+  },
+  "template": {
+    "sheets": {
+      "operations": "Operations",
+      "params": "Parameters",
+      "help": "Help"
+    },
+    "columns": {
+      "id": "ID",
+      "service": "Service",
+      "kind": "Kind",
+      "name": "Operation",
+      "summary": "Description",
+      "avg": "Average RPS",
+      "peak": "Peak RPS",
+      "errorPct": "Errors, %",
+      "reqBytes": "Request size, bytes",
+      "respBytes": "Response size, bytes",
+      "p95": "p95 in production, ms",
+      "comment": "Comment"
+    },
+    "notes": {
+      "avg": "For kafka_consume rows: messages per second",
+      "peak": "Peak over the observation period; not less than the average",
+      "p95": "For kafka_consume rows: allowed consumer lag, seconds",
+      "respBytes": "Leave empty for Kafka rows"
+    },
+    "params": {
+      "stand": "Production stand",
+      "periodFrom": "Observation period from",
+      "periodTo": "Observation period to",
+      "system": "Source of the figures (monitoring)",
+      "filledBy": "Filled by"
+    },
+    "help": {
+      "line1": "Fill columns F–K on the Operations sheet with figures from production monitoring.",
+      "line2": "Do not change column A (ID): the app matches rows by it.",
+      "line3": "Rows you leave empty keep their previous figures in the project.",
+      "line4": "Peak must not be below average; errors are a percentage from 0 to 100."
+    }
+  },
+  "prodLoad": {
+    "title": "Production load",
+    "export": "Export template…",
+    "prefill": "with current figures",
+    "import": "Import…",
+    "exported": "Template with {{count}} operations saved to {{file}}",
+    "importedAt": "Imported {{at}} from stand {{stand}}, copy {{file}}",
+    "uncovered": "Operations without production figures: {{count}}",
+    "previewTitle": "Import preview",
+    "previewCounts": "Filled {{filled}}, empty {{empty}}, unknown IDs {{unknown}}, invalid {{invalid}}",
+    "sourceLine": "Stand {{stand}}, period {{from}} — {{to}}, filled by {{by}}",
+    "row": "Row",
+    "column": "Column",
+    "value": "Value",
+    "reason": "Problem",
+    "reasons": {
+      "not_a_number": "not a number",
+      "negative": "negative",
+      "not_an_integer": "not an integer",
+      "percent_out_of_range": "percent outside 0–100",
+      "peak_below_avg": "peak below average",
+      "avg_missing": "average is missing"
+    },
+    "unknown": "Unknown IDs ({{count}}), skipped",
+    "skippedRows": "Rows with figures but no ID, skipped: {{count}}",
+    "before": "Before",
+    "after": "After",
+    "apply": "Apply"
   }
 }

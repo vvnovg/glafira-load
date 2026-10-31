@@ -3,6 +3,7 @@
     "errors.generic",
     "registry.kinds.grpc",
     "registry.kinds.http",
-    "registry.kinds.sql"
+    "registry.kinds.sql",
+    "template.columns.id"
   ]
 }

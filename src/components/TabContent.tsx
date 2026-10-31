@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import type { Tab } from "../state/workspace";
 import { AboutPanel } from "./about/AboutPanel";
 import { ChunkBoundary } from "./common/ChunkBoundary";
+import { ProdLoadPanel } from "./load/ProdLoadPanel";
 import { ProjectPanel } from "./project/ProjectPanel";
 import { RegistryPanel } from "./registry/RegistryPanel";
 import { ServicePanel } from "./services/ServicePanel";
@@ -37,8 +38,10 @@ export function TabContent({ tab }: { tab: Tab }) {
       return <ServicePanel path={tab.path} serviceId={tab.serviceId} />;
     case "registry":
       return <RegistryPanel path={tab.path} />;
+    case "prod-load":
+      return <ProdLoadPanel path={tab.path} />;
     default:
-      // Остальные экраны проекта появляются в Tasks 18–19.
+      // Остальные экраны проекта появляются в Task 19.
       return <p className="empty">{t("common.loading")}</p>;
   }
 }

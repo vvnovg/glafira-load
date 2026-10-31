@@ -18,3 +18,8 @@ input::placeholder, textarea::placeholder { font-style: italic; color: var(--mut
 .release-notes p { margin: 4px 0; }
 .release-notes code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: var(--bg-alt); border-radius: 3px; padding: 0 3px; }
 .release-notes a { color: var(--accent); }
+/* Нагрузка ПРОМ: предпросмотр импорта и таблица цифр. */
+.import-preview h3 { margin: 0; }
+.import-preview table { font-size: 13px; }
+.import-warnings td:last-child { color: var(--warn); }
+.import-preview details ul { margin: 4px 0; padding-left: 20px; overflow-wrap: anywhere; }
