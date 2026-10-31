@@ -273,6 +273,88 @@ mod tests {
     }
 
     #[test]
+    fn non_finite_numbers_are_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nf.xlsx");
+        let mut wb = rust_xlsxwriter::Workbook::new();
+        let ws = wb.add_worksheet();
+        ws.write_string(0, 0, "ID").unwrap();
+        ws.write_string(1, 0, "http:o:GET /a").unwrap();
+        ws.write_string(1, 5, "nan").unwrap();
+        ws.write_string(1, 6, "inf").unwrap();
+        ws.write_string(1, 7, "1e999").unwrap();
+        ws.write_string(1, 8, "-Infinity").unwrap();
+        ws.write_string(1, 9, "1e3").unwrap();
+        let ws = wb.add_worksheet();
+        ws.write_string(0, 0, "glafira-load:prod-load:1:demo")
+            .unwrap();
+        wb.save(&path).unwrap();
+        let read = read_template(&std::fs::read(&path).unwrap()).unwrap();
+        let r = &read.rows[0];
+        for (c, v) in [(&r.avg, "nan"), (&r.peak, "inf"), (&r.error_pct, "1e999")] {
+            assert_eq!(c, &Cell::Text { value: v.into() });
+        }
+        assert_eq!(
+            r.req_bytes,
+            Cell::Text {
+                value: "-Infinity".into()
+            }
+        );
+        assert_eq!(r.resp_bytes, Cell::Number { value: 1000.0 });
+    }
+
+    #[test]
+    fn params_sheet_is_found_by_marker_in_any_position() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rev.xlsx");
+        let mut wb = rust_xlsxwriter::Workbook::new();
+        let ws = wb.add_worksheet();
+        ws.write_string(0, 0, "glafira-load:prod-load:1:demo")
+            .unwrap();
+        ws.write_string(2, 1, "prod").unwrap();
+        let ws = wb.add_worksheet();
+        ws.write_string(0, 0, "ID").unwrap();
+        ws.write_string(1, 0, "http:o:GET /a").unwrap();
+        ws.write_number(1, 5, 3.0).unwrap();
+        wb.save(&path).unwrap();
+        let read = read_template(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(read.project, "demo");
+        assert_eq!(read.source.stand, "prod");
+        assert_eq!(read.rows.len(), 1);
+        assert_eq!(read.rows[0].row, 2);
+        assert_eq!(read.rows[0].avg, Cell::Number { value: 3.0 });
+    }
+
+    #[test]
+    fn rows_without_id_but_with_figures_are_counted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.xlsx");
+        write_plain(&path, "glafira-load:prod-load:1:demo");
+        let read = read_template(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(read.rows.len(), 1);
+        assert_eq!(read.skipped_rows, 1, "строка с цифрой в F без ID");
+    }
+
+    #[test]
+    fn row_numbers_are_absolute_when_a1_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("off.xlsx");
+        let mut wb = rust_xlsxwriter::Workbook::new();
+        let ws = wb.add_worksheet();
+        // Пустые A1 и верхняя строка заголовка: диапазон начинается ниже и правее.
+        ws.write_string(3, 0, "http:o:GET /a").unwrap();
+        ws.write_number(3, 5, 4.0).unwrap();
+        let ws = wb.add_worksheet();
+        ws.write_string(0, 0, "glafira-load:prod-load:1:demo")
+            .unwrap();
+        wb.save(&path).unwrap();
+        let read = read_template(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(read.rows.len(), 1);
+        assert_eq!(read.rows[0].row, 4, "1-based строка Excel");
+        assert_eq!(read.rows[0].avg, Cell::Number { value: 4.0 });
+    }
+
+    #[test]
     fn single_sheet_workbook_is_rejected() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("one.xlsx");
@@ -326,6 +408,11 @@ mod tests {
         };
         let sheet = read("xl/worksheets/sheet1.xml");
         assert!(sheet.contains("<sheetProtection"), "лист защищён");
+        // В OOXML `autoFilter="0"` — ограничение снято: автофильтр под защитой разрешён.
+        assert!(
+            sheet.contains("autoFilter=\"0\""),
+            "автофильтр разрешён под защитой: {sheet}"
+        );
         assert!(sheet.contains("<pane"), "заголовок закреплён");
         assert!(sheet.contains("<autoFilter"), "автофильтр");
         assert!(sheet.contains("<dataValidations"), "валидация данных");

@@ -4,7 +4,7 @@ use std::path::Path;
 
 use glafira_load_model::prod_load::Figures;
 use rust_xlsxwriter::{
-    Color, DataValidation, DataValidationRule, Format, Note, Workbook, Worksheet,
+    Color, DataValidation, DataValidationRule, Format, Note, ProtectionOptions, Workbook, Worksheet,
 };
 
 use crate::{COLUMNS, MARKER_PREFIX, PARAMS, TEMPLATE_FORMAT, TemplateError, TemplateLabels};
@@ -131,7 +131,11 @@ pub fn write_template(
             ws.autofilter(0, 0, last, (COLUMNS - 1) as u16)?;
         }
         ws.set_freeze_panes(1, 0)?;
-        ws.protect();
+        // Защита листа с рабочим автофильтром (по умолчанию Excel блокирует выпадающие списки).
+        ws.protect_with_options(&ProtectionOptions {
+            use_autofilter: true,
+            ..Default::default()
+        });
     }
     {
         let ws = wb.add_worksheet();
