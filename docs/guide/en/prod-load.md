@@ -27,6 +27,8 @@ edits. Fill in the columns F–L:
 
 For `kafka_consume` rows the figures mean something else: F and G are messages per second, I is the message size, and K
 is the allowed consumer lag in seconds. Excel checks the numbers as you type them; the column headers have notes with these rules.
+In version 0.1.0 column J is not locked for Kafka rows: leave it empty, because a value you enter there is imported as
+is.
 
 **Parameters** holds a marker of the project in cell A1 (do not change it) and the fields about the figures: the
 production stand, the observation period, the monitoring system they come from and who filled them in. **Help**
@@ -34,7 +36,7 @@ repeats these rules for the person who fills the template.
 
 ## Import {#import}
 
-Click [[ui:prodLoad.import]] and choose the filled file. Glafira first checks the marker on the Parameters sheet: a
+Click [[ui:prodLoad.import]] and choose the filled file (up to 32 MiB). Glafira first checks the marker on the Parameters sheet: a
 template of another project or format is rejected with the expected and the found marker. Then it shows a preview:
 
 - **filled** — rows with figures, matched to the registry by ID;

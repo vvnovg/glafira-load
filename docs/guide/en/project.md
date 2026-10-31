@@ -36,8 +36,9 @@ goes into the registry, so you can see in which version an operation appeared. I
 is not a repository, the version is `unversioned` and a warning is shown; the scan still works.
 
 **Contracts.** If the manifest does not list contracts for the service, Glafira finds them in the clone by masks and
-skips `.git`, `node_modules`, `target`, `build`, `dist`, `vendor`, `.idea`, `.gradle` and files ignored by
-`.gitignore`:
+skips `.git`, `node_modules`, `target`, `build`, `dist`, `vendor`, `.idea`, `.gradle` and files ignored by the
+`.gitignore` files of the clone (the `.gitignore` of folders above the clone and your global git excludes do not
+apply):
 
 | Kind | Masks |
 |---|---|
@@ -59,13 +60,18 @@ Without a mapping, the topic of a schema file is guessed from its file name, and
 cancelled, and a cancelled scan writes nothing. [[ui:project.scanAll]] on the project tab scans every service in turn.
 The report shows how many operations were found, how many are new, changed, removed and restored, and the warnings and
 errors by file and line; [[ui:service.openFile]] opens the file in the app your system uses for it. An error in one contract does not stop
-the others: the service gets the operations of the files that parsed. One scan runs in a project at a time.
+the others: the service gets the operations of the files that parsed. If contracts were found but none of them parsed,
+the registry is left unchanged (otherwise every operation of the service would be marked removed) and the report says
+so. A contract file larger than 32 MiB is reported as an error and skipped. When [[ui:project.scanAll]] fails on one
+service, the reports of the other services are kept. One scan runs in a project at a time.
 
 ## Stands {#environments}
 
 A stand is a test environment where the load will run: an [[ui:project.envId]], a [[ui:project.envKind]] (`dev`, `test`,
 `stage` or `prod`) and addresses: [[ui:project.env.http]], [[ui:project.env.kafka]],
-[[ui:project.env.grpc]] and [[ui:project.env.sql]]. Write addresses without passwords: the manifest is committed to git.
+[[ui:project.env.grpc]] and [[ui:project.env.sql]]. The kind is shown as a badge next to its selector, and `prod` is
+red so that a production stand is not mistaken for a test one; in version 0.1.0 the badge is shown only on the project
+tab. Write addresses without passwords: the manifest is committed to git.
 Secrets come with the runner in stage L2; in this version stands are only described.
 
 ## Manifest problems {#problems}

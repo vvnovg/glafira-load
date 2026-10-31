@@ -44,15 +44,19 @@ Each [[ui:service.scan]] merges the new result into the registry:
 - a removed operation that appears again is **restored** and becomes [[ui:registry.status.active]].
 
 Your [[ui:registry.manual]] — tags, owner and notes — are never touched by a scan. A removed operation is deleted for
-good with [[ui:registry.deleteRemoved]]. Scanning again without changes in the contracts leaves the file byte for byte
-the same, and operations are sorted by service and ID, so `git diff` stays readable.
+good with [[ui:registry.deleteRemoved]]. The version where an operation was last seen is updated when the version or
+commit of the clone changes, or when the operation itself changed or came back; an unchanged operation scanned again in
+the same version and commit keeps it. So scanning again without changes in the contracts leaves the file byte for byte
+the same. Operations are sorted by service and ID, so `git diff` stays readable.
 
 ## Diff {#diff}
 
 Every scan writes a snapshot to `registry/scans/`. Turn on [[ui:registry.diffToggle]] to mark the rows that differ
 between the last two snapshots: new, changed or removed. In the scans section under the table, choose any two snapshots
-with [[ui:registry.diffFrom]] and [[ui:registry.diffTo]]. The snapshot also records which fields changed (added,
-removed, changed type or required); [[ui:service.openScan]] in the scan report on the service tab opens it.
+with [[ui:registry.diffFrom]] and [[ui:registry.diffTo]]. Turning the diff on sets the status filter to any status, so
+removed operations and their marks are visible. The snapshot also records which fields changed (added, removed, changed
+type or required); [[ui:service.openScan]] in the scan report on the service tab opens it. In version 0.1.0 these
+per-field changes are only in the snapshots: the registry table marks the rows but does not list the fields.
 
 ## Manual operations {#manual}
 
