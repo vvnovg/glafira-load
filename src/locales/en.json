@@ -72,7 +72,11 @@
       "unsupportedFormat": "Unsupported template format {{version}}",
       "unreadable": "The file cannot be read as .xlsx",
       "otherProject": "The template belongs to project {{found}}, expected {{expected}}",
-      "invalidRows": "The template has {{count}} invalid cell(s)"
+      "invalidRows": "The template has {{count}} invalid cell(s)",
+      "fileNotFound": "Template file not found: {{file}}",
+      "readFailed": "Template file cannot be read: {{file}}: {{reason}}",
+      "badLabels": "Template labels are incomplete: {{reason}}",
+      "writeFailed": "Cannot write the template to {{file}}: {{reason}}"
     },
     "profile": {
       "noProfiles": "Add at least one profile",

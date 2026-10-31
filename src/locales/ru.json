@@ -72,7 +72,11 @@
       "unsupportedFormat": "Неподдерживаемый формат шаблона: {{version}}",
       "unreadable": "Файл не читается как .xlsx",
       "otherProject": "Шаблон от проекта {{found}}, ожидался {{expected}}",
-      "invalidRows": "В шаблоне ошибочных ячеек: {{count}}"
+      "invalidRows": "В шаблоне ошибочных ячеек: {{count}}",
+      "fileNotFound": "Файл шаблона не найден: {{file}}",
+      "readFailed": "Файл шаблона не читается: {{file}}: {{reason}}",
+      "badLabels": "Подписи шаблона заполнены не полностью: {{reason}}",
+      "writeFailed": "Не удалось записать шаблон в {{file}}: {{reason}}"
     },
     "profile": {
       "noProfiles": "Добавьте хотя бы один профиль",

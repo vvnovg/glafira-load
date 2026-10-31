@@ -1,6 +1,5 @@
 //! Профили нагрузки: проверка при сохранении, расчёт, перевод ошибок модели в `AppError`.
 
-use glafira_load_model::prod_load::ProdLoad;
 use glafira_load_model::profile::{Computed, ProfileError, ProfileFile, compute};
 
 use crate::error::{AppError, AppResult, ErrorCode};
@@ -26,7 +25,8 @@ pub fn map_err(e: ProfileError) -> AppError {
             ErrorCode::InvalidInput,
             "errors.profile.tooManySteps",
             "Phase {{phase}} has too many steps (limit {{max}})",
-            phase = phase,
+            // Для пользователя фазы нумеруются с 1.
+            phase = phase + 1,
             max = max
         ),
     }
@@ -46,7 +46,7 @@ pub fn save(d: &ProjectDir, file: &ProfileFile) -> AppResult<()> {
         ));
     }
     let registry = d.registry()?;
-    let prod = d.prod_load().unwrap_or_else(|_| ProdLoad::default());
+    let prod = d.prod_load()?;
     for name in file.profiles.keys() {
         compute(file, name, &registry, &prod).map_err(map_err)?;
     }
@@ -77,7 +77,7 @@ mod tests {
         }];
         let e = save(&d, &f).unwrap_err();
         assert_eq!(e.key, "errors.profile.tooManySteps");
-        assert_eq!(e.params["phase"], "0");
+        assert_eq!(e.params["phase"], "1");
 
         f.profiles.get_mut("stress").unwrap().phases = vec![Phase::Steady { minutes: f64::NAN }];
         assert_eq!(save(&d, &f).unwrap_err().key, "errors.profile.invalidValue");

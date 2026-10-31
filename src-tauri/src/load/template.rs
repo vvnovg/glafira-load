@@ -23,8 +23,8 @@ pub struct TemplatePreview {
     pub skipped_rows: usize,
 }
 
-/// Ошибки xlsx: чужой или повреждённый маркер/формат — `TEMPLATE_INVALID`, файл не читается
-/// как .xlsx — `INVALID_INPUT`, ввод-вывод — внутренняя ошибка.
+/// Ошибки чтения xlsx: чужой или повреждённый маркер/формат и файл, который не разбирается
+/// как .xlsx, — `TEMPLATE_INVALID`; ввод-вывод при разборе байтов невозможен — внутренняя ошибка.
 fn map_err(e: TemplateError) -> AppError {
     match e {
         TemplateError::NoMarker => app_err!(
@@ -39,12 +39,35 @@ fn map_err(e: TemplateError) -> AppError {
             version = version
         ),
         TemplateError::Format(m) => app_err!(
-            ErrorCode::InvalidInput,
+            ErrorCode::TemplateInvalid,
             "errors.template.unreadable",
             "The file cannot be read as .xlsx"
         )
         .with_details(m),
         TemplateError::Io(m) => AppError::internal_with(m),
+    }
+}
+
+/// Ошибки выгрузки: неполный набор подписей — `INVALID_INPUT` (`badLabels`), запись в выбранный
+/// пользователем путь не удалась — `INVALID_INPUT` (`writeFailed`). Остальное для записи невозможно.
+fn map_write_err(e: TemplateError, out: &Path) -> AppError {
+    match e {
+        TemplateError::Format(m) => app_err!(
+            ErrorCode::InvalidInput,
+            "errors.template.badLabels",
+            "Template labels are incomplete: {{reason}}",
+            reason = m
+        ),
+        TemplateError::Io(m) => app_err!(
+            ErrorCode::InvalidInput,
+            "errors.template.writeFailed",
+            "Cannot write the template to {{file}}: {{reason}}",
+            file = out.display(),
+            reason = m
+        ),
+        other @ (TemplateError::NoMarker | TemplateError::BadFormat(_)) => {
+            AppError::internal_with(other.to_string())
+        }
     }
 }
 
@@ -76,13 +99,31 @@ pub fn export(
             figures: prod.operations.get(&o.draft.id).cloned(),
         })
         .collect();
-    write_template(out, &name, &rows, labels).map_err(map_err)?;
+    write_template(out, &name, &rows, labels).map_err(|e| map_write_err(e, out))?;
     Ok(rows.len())
 }
 
 /// Содержимое файла шаблона; путь выбрал пользователь, поэтому границу проекта не проверяем.
+/// Нет файла — `NOT_FOUND`; файл есть, но не читается (права, ввод-вывод) — `TEMPLATE_INVALID`.
 pub fn read_file(file: &Path) -> AppResult<Vec<u8>> {
-    std::fs::read(file).map_err(|e| AppError::from(e).with_details(file.display().to_string()))
+    std::fs::read(file).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            app_err!(
+                ErrorCode::NotFound,
+                "errors.template.fileNotFound",
+                "Template file not found: {{file}}",
+                file = file.display()
+            )
+        } else {
+            app_err!(
+                ErrorCode::TemplateInvalid,
+                "errors.template.readFailed",
+                "Template file cannot be read: {{file}}: {{reason}}",
+                file = file.display(),
+                reason = e
+            )
+        }
+    })
 }
 
 /// Предпросмотр: маркер, проект, строки против реестра и текущих цифр.
@@ -208,15 +249,89 @@ pub(crate) mod tests {
         assert_eq!(e.code, ErrorCode::TemplateMismatch);
         assert_eq!(e.params["found"], "orders-platform");
         assert_eq!(e.params["expected"], "another");
+    }
 
+    #[test]
+    fn unreadable_files_get_their_own_error_classes() {
+        let (tmp, d) = project_with_ops();
         // Не xlsx вообще.
         std::fs::write(tmp.path().join("x.xlsx"), b"junk").unwrap();
+        let e = preview(&d, &tmp.path().join("x.xlsx")).unwrap_err();
         assert_eq!(
-            preview(&d, &tmp.path().join("x.xlsx")).unwrap_err().code,
-            ErrorCode::InvalidInput
+            (e.code, e.key.as_str()),
+            (ErrorCode::TemplateInvalid, "errors.template.unreadable")
         );
         // Нет файла.
-        assert!(preview(&d, &tmp.path().join("none.xlsx")).is_err());
+        let e = preview(&d, &tmp.path().join("none.xlsx")).unwrap_err();
+        assert_eq!(
+            (e.code, e.key.as_str()),
+            (ErrorCode::NotFound, "errors.template.fileNotFound")
+        );
+        assert!(e.params["file"].ends_with("none.xlsx"));
+        // Файл есть, но не читается (каталог вместо файла): не `Internal`/`errors.io`.
+        let e = preview(&d, tmp.path()).unwrap_err();
+        assert_eq!(
+            (e.code, e.key.as_str()),
+            (ErrorCode::TemplateInvalid, "errors.template.readFailed")
+        );
+        assert!(e.params.contains_key("reason"));
+    }
+
+    #[test]
+    fn export_errors_are_mapped_separately_from_reading() {
+        let (tmp, d) = project_with_ops();
+        // Неполный набор подписей.
+        let mut bad = labels();
+        bad.columns.pop();
+        let e = export(&d, &tmp.path().join("t.xlsx"), &bad, false).unwrap_err();
+        assert_eq!(
+            (e.code, e.key.as_str()),
+            (ErrorCode::InvalidInput, "errors.template.badLabels")
+        );
+        assert!(e.params.contains_key("reason"));
+        // Путь, в который нельзя записать.
+        let e = export(&d, &tmp.path().join("no/such/dir/t.xlsx"), &labels(), false).unwrap_err();
+        assert_eq!(
+            (e.code, e.key.as_str()),
+            (ErrorCode::InvalidInput, "errors.template.writeFailed")
+        );
+        assert!(e.params["file"].ends_with("t.xlsx"));
+    }
+
+    /// Шаблон с маркером проекта и двумя строками: цифра без ID и неизвестный ID.
+    fn template_with_stray_rows(path: &Path) {
+        let mut wb = rust_xlsxwriter::Workbook::new();
+        let ws = wb.add_worksheet();
+        ws.write_string(0, 0, "glafira-load:prod-load:1:orders-platform")
+            .unwrap();
+        ws.write_string(2, 1, "prod").unwrap();
+        let ws = wb.add_worksheet();
+        ws.write_string(0, 0, "ID").unwrap();
+        ws.write_number(1, 5, 3.0).unwrap();
+        ws.write_string(2, 0, "http:orders:GET /gone").unwrap();
+        ws.write_number(2, 5, 7.0).unwrap();
+        wb.save(path).unwrap();
+    }
+
+    #[test]
+    fn skipped_rows_surface_in_the_preview() {
+        let (tmp, d) = project_with_ops();
+        let file = tmp.path().join("stray.xlsx");
+        template_with_stray_rows(&file);
+        let p = preview(&d, &file).unwrap();
+        assert_eq!(p.skipped_rows, 1);
+        assert_eq!(serde_json::to_value(&p).unwrap()["skipped_rows"], 1);
+    }
+
+    #[test]
+    fn unknown_ids_are_reported_and_not_imported() {
+        let (tmp, d) = project_with_ops();
+        let file = tmp.path().join("stray.xlsx");
+        template_with_stray_rows(&file);
+        let p = preview(&d, &file).unwrap().preview;
+        assert_eq!(p.unknown_ids, vec!["http:orders:GET /gone"]);
+        assert!(p.filled.is_empty());
+        assert!(p.result.unwrap().operations.is_empty());
     }
 
     #[test]
