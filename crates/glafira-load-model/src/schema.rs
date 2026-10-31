@@ -103,9 +103,46 @@ impl SchemaSummary {
     }
 }
 
-/// `sha256:<hex>` канонического JSON (ключи у `serde_json::Map` упорядочены — результат стабилен).
+/// Пишет JSON в каноническом виде: без пробелов, ключи объектов отсортированы на каждом уровне,
+/// массивы сохраняют порядок. Порядок ключей `serde_json::Map` зависит от features сборки
+/// (`preserve_order` у соседних крейтов переключает его с `BTreeMap` на `IndexMap`), поэтому
+/// на него опираться нельзя.
+fn write_canonical(value: &serde_json::Value, out: &mut Vec<u8>) {
+    use serde_json::Value;
+    match value {
+        Value::Object(map) => {
+            let mut entries: Vec<(&String, &Value)> = map.iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(b.0));
+            out.push(b'{');
+            for (i, (key, v)) in entries.into_iter().enumerate() {
+                if i > 0 {
+                    out.push(b',');
+                }
+                serde_json::to_writer(&mut *out, key).expect("string serializes");
+                out.push(b':');
+                write_canonical(v, out);
+            }
+            out.push(b'}');
+        }
+        Value::Array(items) => {
+            out.push(b'[');
+            for (i, v) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(b',');
+                }
+                write_canonical(v, out);
+            }
+            out.push(b']');
+        }
+        scalar => serde_json::to_writer(&mut *out, scalar).expect("json scalar serializes"),
+    }
+}
+
+/// `sha256:<hex>` канонического JSON (ключи объектов сортируются явно — результат не зависит
+/// от features `serde_json` и порядка вставки).
 pub fn fingerprint_of(value: &serde_json::Value) -> String {
-    let bytes = serde_json::to_vec(value).expect("json value serializes");
+    let mut bytes = Vec::new();
+    write_canonical(value, &mut bytes);
     format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
 }
 
@@ -162,6 +199,32 @@ mod tests {
             fingerprint(&a),
             fingerprint(&b),
             "варианты one_of не объект: порядок значим"
+        );
+    }
+
+    #[test]
+    fn fingerprint_is_pinned_to_a_known_value() {
+        let s = SchemaSummary::object(
+            "body",
+            vec![SchemaSummary::leaf("id", "string").required(true)],
+        );
+        assert_eq!(
+            fingerprint(&s),
+            "sha256:41142de01731254e6483c6fed38a55ea426036a30042b0916f37b8e40c228908"
+        );
+    }
+
+    #[test]
+    fn fingerprint_of_ignores_object_key_insertion_order() {
+        let mut ab = serde_json::Map::new();
+        ab.insert("a".into(), serde_json::json!({"x": 1, "y": [2, 1]}));
+        ab.insert("b".into(), serde_json::json!("v"));
+        let mut ba = serde_json::Map::new();
+        ba.insert("b".into(), serde_json::json!("v"));
+        ba.insert("a".into(), serde_json::json!({"y": [2, 1], "x": 1}));
+        assert_eq!(
+            fingerprint_of(&serde_json::Value::Object(ab)),
+            fingerprint_of(&serde_json::Value::Object(ba))
         );
     }
 

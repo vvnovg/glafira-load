@@ -112,7 +112,7 @@ pub(crate) fn parse_document(bytes: &[u8]) -> Result<serde_json::Value, ParseErr
     if text.trim_start().starts_with('{') {
         return serde_json::from_str(text).map_err(|e| ParseError {
             message: e.to_string(),
-            line: Some(e.line() as u32),
+            line: Some((e.line() as u32).min(text.lines().count().max(1) as u32)),
         });
     }
     serde_yaml_ng::from_str(text).map_err(|e| ParseError {
