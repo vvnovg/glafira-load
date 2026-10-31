@@ -11,9 +11,15 @@ use regex::Regex;
 
 use crate::{ContractInput, ParseError, ParseOptions, ParseResult};
 
-/// Объявление класса, а не слово «class» в тексте: только в начале строки после модификаторов.
+/// Объявление класса, а не слово «class» в тексте: только в начале строки после аннотаций
+/// (в т. ч. на той же строке, `@RestController @RequestMapping("/api") class Foo`) и модификаторов.
+/// Аннотация — `@Имя` с необязательными скобками (вложенные — на один уровень, как у `MAPPING`).
+/// Позиция ключевого слова — группа `kw`: всё, что левее, относится к аннотациям класса.
 static CLASS: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?m)^\s*(?:(?:public|private|protected|internal|open|abstract|final|data|sealed|static)\s+)*(?:class|interface|object)\s+\w+").unwrap()
+    Regex::new(
+        r"(?m)^\s*(?:(?:@[\w.]+(?:\((?:[^()]|\([^()]*\))*\))?|public|private|protected|internal|open|abstract|final|data|sealed|static|enum|annotation|inner|value|companion|fun)\s+)*(?P<kw>class|interface|object)\s+\w+",
+    )
+    .unwrap()
 });
 static MAPPING: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"@(Get|Post|Put|Delete|Patch|Request)Mapping\s*(?:\(((?:[^()]|\([^()]*\))*)\))?")
@@ -122,9 +128,10 @@ fn mask_comments(text: &str, kotlin: bool) -> String {
                 i += if b.get(i + 1) == Some(&b'\\') {
                     b[i + 2..]
                         .iter()
+                        .skip(1)
                         .take(8)
                         .position(|&c| c == b'\'')
-                        .map_or(1, |p| p + 3)
+                        .map_or(1, |p| p + 4)
                 } else if b.get(i + 2) == Some(&b'\'') {
                     3
                 } else {
@@ -332,7 +339,10 @@ pub fn parse(input: &ContractInput, opts: &ParseOptions) -> Result<ParseResult, 
     let masked = mask_comments(original, kotlin);
     let text = masked.as_str();
     let mut out = ParseResult::default();
-    let class_at = CLASS.find(text).map(|m| m.start()).unwrap_or(0);
+    let class_at = CLASS
+        .captures(text)
+        .and_then(|c| c.name("kw"))
+        .map_or(0, |m| m.start());
     let base = MAPPING
         .captures_iter(text)
         .take_while(|c| c.get(0).map(|m| m.start() < class_at).unwrap_or(false))
@@ -737,6 +747,49 @@ public class OrderController {
                 ("query.plain", "string", true)
             ]
         );
+    }
+
+    #[test]
+    fn kotlin_annotations_on_class_line_keep_base_path() {
+        let src = "@RestController @RequestMapping(\"/api\") class Foo {\n    @GetMapping(\"/x\")\n    fun x() = 1\n}\n";
+        let out = run("src/main/kotlin/demo/Foo.kt", src);
+        assert_eq!(ids(&out), ["http:orders:GET /api/x"]);
+        assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+    }
+
+    #[test]
+    fn java_annotation_before_class_on_same_line_keeps_base_path() {
+        let src = "package demo;\n@RequestMapping(\"/v1\")\n@RestController public class X {\n    @GetMapping(\"/y\")\n    public void y() {}\n}\n";
+        let out = run("src/main/java/demo/X.java", src);
+        assert_eq!(ids(&out), ["http:orders:GET /v1/y"]);
+        assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+    }
+
+    #[test]
+    fn class_regex_ignores_calls_and_class_type() {
+        assert!(!CLASS.is_match("val k = classify(x)\n"));
+        assert!(!CLASS.is_match("    Class<?> c = foo();\n"));
+        assert!(CLASS.is_match("@Foo(a = (1)) fun interface Bar {\n"));
+        assert!(CLASS.is_match("    companion object Names {\n"));
+    }
+
+    #[test]
+    fn kotlin_request_param_literal_name() {
+        let src = "@RestController\nclass C {\n    @GetMapping(\"/u\")\n    fun u(@RequestParam(\"user_id\") userId: String) = 1\n}\n";
+        let out = run("src/main/kotlin/demo/C.kt", src);
+        assert_eq!(
+            names(out.operations[0].request.as_ref().unwrap()),
+            vec![("query.user_id", "string", true)]
+        );
+    }
+
+    #[test]
+    fn escaped_quote_char_literal_does_not_swallow_next_line() {
+        let src = "@RestController\nclass C {\n    val q = '\\''\n    // @GetMapping(\"/no\")\n    @GetMapping(\"/yes\")\n    fun a() = 1\n}\n";
+        let masked = mask_comments(src, true);
+        assert!(!masked.contains("/no"), "{masked}");
+        let out = run("src/main/kotlin/demo/C.kt", src);
+        assert_eq!(ids(&out), ["http:orders:GET /yes"]);
     }
 
     #[test]
