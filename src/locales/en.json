@@ -48,7 +48,14 @@
       "none": "No updates available"
     },
     "project": {
-      "emptyName": "Project name cannot be empty"
+      "emptyName": "Project name cannot be empty",
+      "outside": "Path {{path}} is outside {{base}}",
+      "invalidFile": "{{file}}: {{error}}",
+      "notFound": "No {{file}} in {{path}}",
+      "noService": "Service {{id}} is not in the manifest",
+      "serviceDirMissing": "Folder of service {{id}} not found: {{path}}",
+      "dirNotEmpty": "Folder {{path}} is not empty",
+      "invalidManifest": "The manifest has {{count}} problem(s)"
     }
   },
   "settings": {

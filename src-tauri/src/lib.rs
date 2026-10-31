@@ -3,9 +3,11 @@ pub mod i18n;
 pub mod commands;
 mod dock_name;
 pub mod error;
+pub mod git;
 pub mod logging;
 pub mod policy;
 pub mod product;
+pub mod project;
 pub mod settings;
 pub mod state;
 pub mod storage;
@@ -41,6 +43,12 @@ pub fn run() {
             commands::settings::get_language_settings,
             commands::settings::set_language,
             commands::settings::get_policy_status,
+            commands::project::project_create,
+            commands::project::project_open,
+            commands::project::project_close,
+            commands::project::project_save,
+            commands::project::project_recent,
+            commands::project::open_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");

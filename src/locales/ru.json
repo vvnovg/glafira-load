@@ -48,7 +48,14 @@
       "none": "Обновлений нет"
     },
     "project": {
-      "emptyName": "Имя проекта не может быть пустым"
+      "emptyName": "Имя проекта не может быть пустым",
+      "outside": "Путь {{path}} вне {{base}}",
+      "invalidFile": "{{file}}: {{error}}",
+      "notFound": "В {{path}} нет {{file}}",
+      "noService": "Сервиса {{id}} нет в манифесте",
+      "serviceDirMissing": "Папка сервиса {{id}} не найдена: {{path}}",
+      "dirNotEmpty": "Папка {{path}} не пуста",
+      "invalidManifest": "В манифесте проблем: {{count}}"
     }
   },
   "settings": {
