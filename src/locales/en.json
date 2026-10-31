@@ -154,6 +154,10 @@
     },
     "prodLoad": {
       "title": "The template is an .xlsx with locked IDs. The production team fills in the figures; import matches rows by ID and shows the diff before writing load/prod-load.yaml."
+    },
+    "profile": {
+      "title": "Target RPS = production figure × k_env × k_growth; the share is its part of the sum. Phases set how the load changes over time; the runner (stage L2) executes them as is.",
+      "coefficients": "k_env — the stand's capacity relative to production, k_growth — the growth margin. An operation override wins over a service one, a service one over the global."
     }
   },
   "sidebar": {
@@ -403,5 +407,44 @@
     "before": "Before",
     "after": "After",
     "apply": "Apply"
+  },
+  "profile": {
+    "title": "Load profile",
+    "unsaved": "unsaved changes",
+    "invalidValues": "Fix the highlighted values to save",
+    "coefficients": "Coefficients",
+    "serviceOverrides": "Overrides by service",
+    "operationOverrides": "Overrides by operation",
+    "overrideKey": "service id or operation id",
+    "addOverride": "Add",
+    "profiles": "Profiles",
+    "newName": "new profile name",
+    "addProfile": "Add profile",
+    "renameProfile": "Rename profile",
+    "removeProfile": "Remove profile",
+    "basis": "Basis",
+    "basisAvg": "average production load",
+    "basisPeak": "peak production load",
+    "phaseKind": "Phase kind",
+    "phases": {
+      "ramp": "ramp",
+      "steady": "steady",
+      "steps": "steps"
+    },
+    "minutes": "minutes",
+    "toPct": "to %",
+    "stepPct": "step %",
+    "stepMinutes": "minutes per step",
+    "maxPct": "max %",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "addPhase": "Add phase",
+    "targets": "Targets of {{profile}}: {{total}} RPS in total, {{minutes}} min",
+    "computedFromSaved": "Computed from the saved file; save to recompute",
+    "basisValue": "Basis RPS",
+    "target": "Target RPS",
+    "share": "Share",
+    "uncovered": "Not covered by production figures: {{count}}",
+    "chartMinutes": "minutes"
   }
 }

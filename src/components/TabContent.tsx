@@ -4,6 +4,7 @@ import type { Tab } from "../state/workspace";
 import { AboutPanel } from "./about/AboutPanel";
 import { ChunkBoundary } from "./common/ChunkBoundary";
 import { ProdLoadPanel } from "./load/ProdLoadPanel";
+import { ProfilePanel } from "./profile/ProfilePanel";
 import { ProjectPanel } from "./project/ProjectPanel";
 import { RegistryPanel } from "./registry/RegistryPanel";
 import { ServicePanel } from "./services/ServicePanel";
@@ -24,7 +25,6 @@ function LazyHelp({ tab }: { tab: Extract<Tab, { kind: "help" }> }) {
 }
 
 export function TabContent({ tab }: { tab: Tab }) {
-  const { t } = useTranslation();
   switch (tab.kind) {
     case "about":
       return <AboutPanel />;
@@ -40,8 +40,7 @@ export function TabContent({ tab }: { tab: Tab }) {
       return <RegistryPanel path={tab.path} />;
     case "prod-load":
       return <ProdLoadPanel path={tab.path} />;
-    default:
-      // Остальные экраны проекта появляются в Task 19.
-      return <p className="empty">{t("common.loading")}</p>;
+    case "profile":
+      return <ProfilePanel path={tab.path} />;
   }
 }
