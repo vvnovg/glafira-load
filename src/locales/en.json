@@ -77,6 +77,7 @@
       "invalidRows": "The template has {{count}} invalid cell(s)",
       "fileNotFound": "Template file not found: {{file}}",
       "readFailed": "Template file cannot be read: {{file}}: {{reason}}",
+      "tooLarge": "Template file {{file}} is larger than {{limit}} MiB",
       "badLabels": "Template labels are incomplete: {{reason}}",
       "writeFailed": "Cannot write the template to {{file}}: {{reason}}"
     },

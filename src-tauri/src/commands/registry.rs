@@ -114,12 +114,14 @@ pub async fn registry_update_manual(
 ) -> AppResult<Operation> {
     blocking(move || {
         let d = ProjectDir::open(&path)?;
-        let mut r = d.registry()?;
-        let op = r.get_mut(&id).ok_or_else(|| not_found(&id))?;
-        op.manual = manual;
-        let out = op.clone();
-        d.save_registry(&r)?;
-        Ok(out)
+        d.with_registry_lock(|| {
+            let mut r = d.registry()?;
+            let op = r.get_mut(&id).ok_or_else(|| not_found(&id))?;
+            op.manual = manual;
+            let out = op.clone();
+            d.save_registry(&r)?;
+            Ok(out)
+        })
     })
     .await
 }
@@ -144,32 +146,34 @@ pub async fn registry_add_manual(path: String, draft: OperationDraft) -> AppResu
         if draft.name.trim().is_empty() {
             draft.name = address_label(&draft.address);
         }
-        let mut r = d.registry()?;
-        if r.get(&draft.id).is_some() {
-            return Err(app_err!(
-                ErrorCode::InvalidInput,
-                "errors.registry.duplicate",
-                "Operation {{id}} already exists",
-                id = draft.id
-            ));
-        }
-        let seen = Seen {
-            version: "manual".into(),
-            commit: String::new(),
-            at: now_rfc3339(),
-        };
-        let op = Operation {
-            fingerprint: draft.fingerprint(),
-            draft,
-            status: Status::Active,
-            first_seen: seen.clone(),
-            last_seen: seen,
-            manual: Manual::default(),
-        };
-        r.operations.push(op.clone());
-        r.sort();
-        d.save_registry(&r)?;
-        Ok(op)
+        d.with_registry_lock(|| {
+            let mut r = d.registry()?;
+            if r.get(&draft.id).is_some() {
+                return Err(app_err!(
+                    ErrorCode::InvalidInput,
+                    "errors.registry.duplicate",
+                    "Operation {{id}} already exists",
+                    id = draft.id
+                ));
+            }
+            let seen = Seen {
+                version: "manual".into(),
+                commit: String::new(),
+                at: now_rfc3339(),
+            };
+            let op = Operation {
+                fingerprint: draft.fingerprint(),
+                draft,
+                status: Status::Active,
+                first_seen: seen.clone(),
+                last_seen: seen,
+                manual: Manual::default(),
+            };
+            r.operations.push(op.clone());
+            r.sort();
+            d.save_registry(&r)?;
+            Ok(op)
+        })
     })
     .await
 }
@@ -178,11 +182,13 @@ pub async fn registry_add_manual(path: String, draft: OperationDraft) -> AppResu
 pub async fn registry_delete(path: String, id: String) -> AppResult<()> {
     blocking(move || {
         let d = ProjectDir::open(&path)?;
-        let mut r = d.registry()?;
-        if !r.remove(&id) {
-            return Err(not_found(&id));
-        }
-        d.save_registry(&r)
+        d.with_registry_lock(|| {
+            let mut r = d.registry()?;
+            if !r.remove(&id) {
+                return Err(not_found(&id));
+            }
+            d.save_registry(&r)
+        })
     })
     .await
 }
@@ -203,15 +209,20 @@ pub struct ScanMeta {
 /// Снимок из `registry/scans/`; другой файл проекта или путь вне каталога снимков —
 /// `PATH_OUTSIDE_PROJECT`.
 fn read_scan(d: &ProjectDir, file: &str) -> AppResult<Scan> {
-    inside(&d.file(SCANS_DIR), &d.file(file))?;
-    let text = d.read_text(file)?.ok_or_else(|| {
+    let not_found = || {
         app_err!(
             ErrorCode::NotFound,
             "errors.registry.scanNotFound",
             "Scan {{file}} not found",
             file = file
         )
-    })?;
+    };
+    // Каталога снимков ещё нет (ни одного разбора) — снимка нет, а не сбой канонизации пути.
+    if !d.file(SCANS_DIR).is_dir() {
+        return Err(not_found());
+    }
+    inside(&d.file(SCANS_DIR), &d.file(file))?;
+    let text = d.read_text(file)?.ok_or_else(not_found)?;
     from_yaml(&text).map_err(|e| {
         app_err!(
             ErrorCode::ProjectInvalid,
@@ -307,7 +318,8 @@ mod tests {
     use crate::scan::run::scan_service_blocking;
     use glafira_load_model::project::{Manifest, Service};
     use glafira_load_model::registry::Address;
-    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     async fn project_at(service_path: &str) -> (tempfile::TempDir, String) {
         let dir = tempfile::tempdir().unwrap();
@@ -560,6 +572,80 @@ mod tests {
             .code,
             ErrorCode::NotFound
         );
+    }
+
+    #[tokio::test]
+    async fn diff_before_the_first_scan_is_not_found() {
+        let (_tmp, path) = project().await;
+        let d = ProjectDir::open(&path).unwrap();
+        let _ = std::fs::remove_dir_all(d.file(SCANS_DIR));
+        let e = registry_diff(
+            path,
+            "registry/scans/a.yaml".into(),
+            "registry/scans/b.yaml".into(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            (e.code, e.key.as_str()),
+            (ErrorCode::NotFound, "errors.registry.scanNotFound")
+        );
+    }
+
+    /// Держит блокировку реестра проекта в другом потоке ~150 мс; возвращает флаг «отпущена».
+    fn hold_registry_lock(path: &str) -> Arc<AtomicBool> {
+        let released = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (p, flag) = (path.to_string(), released.clone());
+        std::thread::spawn(move || {
+            let d = ProjectDir::open(&p).unwrap();
+            d.with_registry_lock(|| {
+                tx.send(()).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(150));
+                flag.store(true, Ordering::SeqCst);
+            });
+        });
+        rx.recv().unwrap();
+        released
+    }
+
+    #[tokio::test]
+    async fn manual_writes_wait_for_the_registry_lock() {
+        let (_tmp, path) = project_at(&fixture("orders-openapi")).await;
+        scan(&path);
+        let id = "http:billing:POST /v1/orders".to_string();
+        let released = hold_registry_lock(&path);
+        let manual = Manual {
+            notes: "during scan".into(),
+            ..Default::default()
+        };
+        registry_update_manual(path.clone(), id.clone(), manual)
+            .await
+            .unwrap();
+        assert!(released.load(Ordering::SeqCst), "правка ждала блокировку");
+        // Разбор тоже берёт блокировку, и правка, сделанная до него, переживает слияние.
+        let released = hold_registry_lock(&path);
+        scan(&path);
+        assert!(released.load(Ordering::SeqCst), "разбор ждал блокировку");
+        assert_eq!(
+            registry_get(path.clone(), id).await.unwrap().manual.notes,
+            "during scan"
+        );
+        let released = hold_registry_lock(&path);
+        let draft = OperationDraft::new(
+            "billing",
+            OpKind::Sql,
+            Address::Sql { name: "x".into() },
+            Source::manual(),
+        );
+        let op = registry_add_manual(path.clone(), draft).await.unwrap();
+        assert!(
+            released.load(Ordering::SeqCst),
+            "добавление ждало блокировку"
+        );
+        let released = hold_registry_lock(&path);
+        registry_delete(path.clone(), op.draft.id).await.unwrap();
+        assert!(released.load(Ordering::SeqCst), "удаление ждало блокировку");
     }
 
     #[tokio::test]

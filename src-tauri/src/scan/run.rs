@@ -32,6 +32,7 @@ use crate::project::paths::{canonical, inside, relative, resolve};
 use crate::scan::discover::discover;
 use crate::scan::migrations;
 pub use crate::scan::registry::ScanRegistry;
+use crate::storage::fs::{MAX_INPUT_BYTES, read_capped};
 
 /// Справочник таблиц из миграций: `registry/tables/<сервис>.yaml`.
 pub const TABLES_DIR: &str = "registry/tables";
@@ -191,7 +192,8 @@ pub fn scan_service_blocking(
     let rejected = RefCell::new(Vec::<String>::new());
     let read = |rel: &str| -> Option<Vec<u8>> {
         match inside(&clone, &clone.join(rel)) {
-            Ok(p) => std::fs::read(p).ok(),
+            // Соседний файл больше предела не читается — импортёр отметит ссылку неразрешённой.
+            Ok(p) => read_capped(&p, MAX_INPUT_BYTES).ok().flatten(),
             Err(e) => {
                 rejected.borrow_mut().push(e.message);
                 None
@@ -253,8 +255,19 @@ pub fn scan_service_blocking(
             total,
             file: c.path.clone(),
         });
-        let bytes = match std::fs::read(clone.join(&c.path)) {
-            Ok(b) => b,
+        let bytes = match read_capped(&clone.join(&c.path), MAX_INPUT_BYTES) {
+            Ok(Some(b)) => b,
+            Ok(None) => {
+                report.errors.push(diag(
+                    &c.path,
+                    None,
+                    format!(
+                        "file is larger than {} MiB, not parsed",
+                        MAX_INPUT_BYTES / (1024 * 1024)
+                    ),
+                ));
+                continue;
+            }
             Err(e) => {
                 report
                     .errors
@@ -323,10 +336,15 @@ pub fn scan_service_blocking(
         commit: git.commit.clone(),
         at: now_rfc3339(),
     };
-    let mut registry = dir.registry()?;
-    // Правило `last_seen` (повторный разбор той же версии не меняет файл) — внутри `merge`.
-    report.summary = merge(&mut registry, service_id, drafts, &seen);
-    dir.save_registry(&registry)?;
+    // Чтение, слияние и запись — под блокировкой проекта: ручная правка реестра, сделанная
+    // в это время, не затирается. Правило `last_seen` (повторный разбор той же версии не меняет
+    // файл) — внутри `merge`.
+    let registry = dir.with_registry_lock(|| -> AppResult<_> {
+        let mut registry = dir.registry()?;
+        report.summary = merge(&mut registry, service_id, drafts, &seen);
+        dir.save_registry(&registry)?;
+        Ok(registry)
+    })?;
     let scan = Scan {
         format: SCAN_FORMAT,
         at: seen.at.clone(),
@@ -534,6 +552,30 @@ mod tests {
             std::fs::read_dir(d.file(SCANS_DIR)).unwrap().count(),
             snapshots
         );
+    }
+
+    #[test]
+    fn oversized_contract_is_a_file_error_not_a_scan_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        for f in ["openapi.yaml", "schemas/order.yaml"] {
+            std::fs::create_dir_all(tmp.path().join("schemas")).unwrap();
+            std::fs::copy(
+                format!("{}/orders-openapi/{f}", fixtures()),
+                tmp.path().join(f),
+            )
+            .unwrap();
+        }
+        // Разреженный файл: места на диске не занимает.
+        let big = std::fs::File::create(tmp.path().join("swagger.json")).unwrap();
+        big.set_len(MAX_INPUT_BYTES + 1).unwrap();
+        let (_p, d) = project_with(tmp.path().to_str().unwrap(), vec![]);
+        let r = scan(&d);
+        assert_eq!(r.contracts, 2);
+        assert_eq!(r.errors.len(), 1, "{:?}", r.errors);
+        assert_eq!(r.errors[0].path, "swagger.json");
+        assert!(r.errors[0].message.contains("larger than 32 MiB"));
+        assert_eq!(r.summary.added.len(), 2, "остальные контракты разобраны");
+        assert!(!r.scan_file.is_empty());
     }
 
     #[test]

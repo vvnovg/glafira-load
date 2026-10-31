@@ -79,7 +79,9 @@ fn proto_includes(rel: &str) -> Vec<String> {
 }
 
 /// Контракты клона по маскам. Пути — относительно канонического корня клона, разделитель `/`.
-/// Служебные каталоги (`SKIP_DIRS`) и файлы из `.gitignore` пропускаются, ссылки не обходятся;
+/// Служебные каталоги (`SKIP_DIRS`) и файлы из `.gitignore` самого клона пропускаются (правила
+/// родительских каталогов и глобальный `core.excludesFile` не действуют: клон может лежать в чужом
+/// репозитории или в игнорируемой папке), ссылки не обходятся;
 /// откатные миграции (`*.down.sql`, Flyway `U<версия>__`) не попадают в список.
 pub fn discover(clone: &Path) -> Vec<ContractRef> {
     let clone = dunce::canonicalize(clone).unwrap_or_else(|_| clone.to_path_buf());
@@ -88,6 +90,10 @@ pub fn discover(clone: &Path) -> Vec<ContractRef> {
     let walk = WalkBuilder::new(&clone)
         .hidden(false)
         .git_ignore(true)
+        .parents(false)
+        .git_global(false)
+        // `.gitignore` клона действует и тогда, когда `.git` лежит выше (клон — подпапка монорепо).
+        .require_git(false)
         // Сам корень клона может называться, например, `build` — проверяются только вложенные.
         .filter_entry(|e| {
             e.depth() == 0
@@ -232,6 +238,20 @@ mod tests {
                 "migrations/2_more.UP.sql"
             ]
         );
+    }
+
+    #[test]
+    fn parent_gitignore_does_not_hide_contracts_but_own_gitignore_does() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join(".git")).unwrap();
+        std::fs::write(tmp.path().join(".gitignore"), "clone/\nopenapi.yaml\n").unwrap();
+        let clone = tmp.path().join("clone");
+        std::fs::create_dir_all(clone.join("gen")).unwrap();
+        std::fs::write(clone.join("openapi.yaml"), "openapi: 3.0.0").unwrap();
+        std::fs::write(clone.join("gen/swagger.yaml"), "openapi: 3.0.0").unwrap();
+        std::fs::write(clone.join(".gitignore"), "gen/\n").unwrap();
+        let paths: Vec<String> = discover(&clone).into_iter().map(|c| c.path).collect();
+        assert_eq!(paths, ["openapi.yaml"]);
     }
 
     #[cfg(unix)]

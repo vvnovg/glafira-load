@@ -77,6 +77,7 @@
       "invalidRows": "В шаблоне ошибочных ячеек: {{count}}",
       "fileNotFound": "Файл шаблона не найден: {{file}}",
       "readFailed": "Файл шаблона не читается: {{file}}: {{reason}}",
+      "tooLarge": "Файл шаблона {{file}} больше {{limit}} МиБ",
       "badLabels": "Подписи шаблона заполнены не полностью: {{reason}}",
       "writeFailed": "Не удалось записать шаблон в {{file}}: {{reason}}"
     },

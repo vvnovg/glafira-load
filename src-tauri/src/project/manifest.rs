@@ -1,6 +1,8 @@
 //! Папка проекта НТ: манифест и файлы этапа L1 (спека L1 §3). Все записи — через `atomic_write_shared`.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use glafira_load_model::prod_load::{PROD_LOAD_FILE, ProdLoad};
 use glafira_load_model::profile::{PROFILE_FILE, ProfileFile};
@@ -13,6 +15,12 @@ use crate::error::{AppError, AppResult, ErrorCode};
 use crate::project::paths::canonical;
 use crate::project::paths::{inside, resolve};
 use crate::storage::fs::atomic_write_shared;
+use crate::sync::MutexExt;
+
+/// Блокировки записи реестра по каноническому корню проекта. Общие на процесс (а не в
+/// `AppState`): ими пользуются блокирующие функции разбора и команд реестра и их тесты.
+static REGISTRY_LOCKS: LazyLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> =
+    LazyLock::new(Mutex::default);
 
 /// Проект для фронтенда: манифест, проблемы проверки и сервисы без папки клона.
 #[derive(Debug, Clone, Serialize)]
@@ -130,6 +138,19 @@ impl ProjectDir {
 
     pub fn save_registry(&self, r: &Registry) -> AppResult<()> {
         self.write_text(REGISTRY_FILE, &to_yaml(r))
+    }
+
+    /// Выполняет «прочитать реестр → изменить → записать» под блокировкой проекта: правка ручных
+    /// полей во время слияния разбора не теряется (кто второй — читает уже записанный файл).
+    /// Ключ — канонический корень, поэтому разные написания пути дают одну блокировку.
+    pub fn with_registry_lock<T>(&self, f: impl FnOnce() -> T) -> T {
+        let lock = REGISTRY_LOCKS
+            .lock_safe()
+            .entry(self.root.clone())
+            .or_default()
+            .clone();
+        let _guard = lock.lock_safe();
+        f()
     }
 
     /// Нагрузка ПРОМ; без файла — пустая.

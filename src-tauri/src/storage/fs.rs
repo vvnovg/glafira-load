@@ -222,6 +222,27 @@ pub fn read_json_or_quarantine<T: DeserializeOwned>(
     Ok(None)
 }
 
+/// Верхняя граница входного файла (контракт, шаблон xlsx): 32 МиБ. Больше — не читаем целиком
+/// в память; такой контракт или шаблон почти наверняка не тот файл.
+pub const MAX_INPUT_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Файл целиком, если он не больше `cap` байт; больше — `Ok(None)`. Читается не больше `cap + 1`
+/// байт, даже если файл растёт во время чтения.
+pub fn read_capped(path: &Path, cap: u64) -> std::io::Result<Option<Vec<u8>>> {
+    use std::io::Read;
+    let file = File::open(path)?;
+    if file
+        .metadata()
+        .map(|m| m.is_file() && m.len() > cap)
+        .unwrap_or(false)
+    {
+        return Ok(None);
+    }
+    let mut out = Vec::new();
+    file.take(cap + 1).read_to_end(&mut out)?;
+    Ok((out.len() as u64 <= cap).then_some(out))
+}
+
 pub fn write_json<T: Serialize>(path: &Path, value: &T) -> AppResult<()> {
     atomic_write(path, &serde_json::to_vec_pretty(value)?)
 }
@@ -230,6 +251,16 @@ pub fn write_json<T: Serialize>(path: &Path, value: &T) -> AppResult<()> {
 mod tests {
     use super::*;
     use crate::error::ErrorCode;
+
+    #[test]
+    fn read_capped_returns_none_above_the_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("a");
+        std::fs::write(&p, b"12345").unwrap();
+        assert_eq!(read_capped(&p, 5).unwrap().as_deref(), Some(&b"12345"[..]));
+        assert_eq!(read_capped(&p, 4).unwrap(), None);
+        assert!(read_capped(&dir.path().join("none"), 5).is_err());
+    }
 
     fn leftover_tmps(dir: &Path) -> Vec<PathBuf> {
         std::fs::read_dir(dir)

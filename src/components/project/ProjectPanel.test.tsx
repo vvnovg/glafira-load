@@ -41,6 +41,25 @@ describe("ProjectPanel", () => {
     expect(api.projectOpen).toHaveBeenCalledWith("/p/orders");
   });
 
+  it("shows the environment kind badge, red for prod", async () => {
+    renderWithClient(<ProjectPanel path="/p/orders" />);
+    const kind = await screen.findByLabelText("Вид");
+    const badge = screen.getByTestId("env-badge");
+    expect(badge).toHaveTextContent("TEST");
+    await userEvent.selectOptions(kind, "prod");
+    expect(badge).toHaveTextContent("PROD");
+    expect(badge).toHaveStyle({ backgroundColor: "rgb(220, 38, 38)" });
+  });
+
+  it("keeps the reports of scan-all and shows why a service failed", async () => {
+    const report = (service: string, notice: unknown) => ({ service, git: { version: "v1", commit: "", available: true, error: null }, contracts: 1, operationsFound: 1, tablesFound: 0, summary: { added: [], changed: [], removed: [], restored: [], unchanged: 1 }, warnings: [], errors: notice ? [{ path: "", line: null, message: "x" }] : [], scanFile: "", cancelled: false, notice });
+    api.serviceScan.mockResolvedValueOnce([report("orders", null), report("billing", { key: "errors.scan.nothingParsed", params: {}, text: "No contract could be parsed; registry left unchanged" })] as never);
+    renderWithClient(<ProjectPanel path="/p/orders" />);
+    await userEvent.click(await screen.findByRole("button", { name: "Разобрать все сервисы" }));
+    expect(await screen.findByText(/Ни один контракт не разобран/)).toBeInTheDocument();
+    expect(screen.getByText(/^orders \(v1\)/)).toBeInTheDocument();
+  });
+
   it("creates a new project and switches the tab", async () => {
     useWorkspace.getState().open({ kind: "project", path: null });
     renderWithClient(<ProjectPanel path={null} />);

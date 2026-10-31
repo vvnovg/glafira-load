@@ -13,6 +13,7 @@ use serde::Serialize;
 use crate::error::{AppError, AppResult, ErrorCode};
 use crate::project::manifest::ProjectDir;
 use crate::scan::run::now_rfc3339;
+use crate::storage::fs::{MAX_INPUT_BYTES, read_capped};
 
 /// Предпросмотр импорта плюс то, что видно только при чтении файла.
 #[derive(Debug, Clone, Serialize)]
@@ -104,9 +105,10 @@ pub fn export(
 }
 
 /// Содержимое файла шаблона; путь выбрал пользователь, поэтому границу проекта не проверяем.
-/// Нет файла — `NOT_FOUND`; файл есть, но не читается (права, ввод-вывод) — `TEMPLATE_INVALID`.
+/// Нет файла — `NOT_FOUND`; файл есть, но не читается (права, ввод-вывод) или больше
+/// `MAX_INPUT_BYTES` — `TEMPLATE_INVALID`.
 pub fn read_file(file: &Path) -> AppResult<Vec<u8>> {
-    std::fs::read(file).map_err(|e| {
+    let read = read_capped(file, MAX_INPUT_BYTES).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             app_err!(
                 ErrorCode::NotFound,
@@ -123,6 +125,15 @@ pub fn read_file(file: &Path) -> AppResult<Vec<u8>> {
                 reason = e
             )
         }
+    })?;
+    read.ok_or_else(|| {
+        app_err!(
+            ErrorCode::TemplateInvalid,
+            "errors.template.tooLarge",
+            "Template file {{file}} is larger than {{limit}} MiB",
+            file = file.display(),
+            limit = MAX_INPUT_BYTES / (1024 * 1024)
+        )
     })
 }
 
@@ -275,6 +286,15 @@ pub(crate) mod tests {
             (ErrorCode::TemplateInvalid, "errors.template.readFailed")
         );
         assert!(e.params.contains_key("reason"));
+        // Больше 32 МиБ — не читается целиком (файл разреженный, места не занимает).
+        let big = std::fs::File::create(tmp.path().join("big.xlsx")).unwrap();
+        big.set_len(MAX_INPUT_BYTES + 1).unwrap();
+        let e = preview(&d, &tmp.path().join("big.xlsx")).unwrap_err();
+        assert_eq!(
+            (e.code, e.key.as_str()),
+            (ErrorCode::TemplateInvalid, "errors.template.tooLarge")
+        );
+        assert_eq!(e.params["limit"], "32");
     }
 
     #[test]

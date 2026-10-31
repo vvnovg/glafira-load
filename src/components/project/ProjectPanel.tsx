@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api, toAppError } from "../../api/client";
 import type { EnvKind, Environment, Manifest, ManifestProblem, Project, ScanProgress, ScanReport, Service } from "../../api/types";
+import { tr } from "../../i18n/text";
+import { ENV_COLORS, ENV_LABELS } from "../../lib/env";
 import { projectRelative } from "../../lib/paths";
 import { useHelpChapter } from "../../state/helpContext";
 import { tabId, useWorkspace } from "../../state/workspace";
@@ -167,6 +169,10 @@ function EnvRow({ e, onChange, onRemove, invalid }: { e: Environment; onChange: 
             ))}
           </select>
         </label>
+        {/* Бейдж вида как в семействе: `prod` — красный, чтобы стенд ПРОМ не спутать с тестовым. */}
+        <span className="env-badge" data-testid="env-badge" style={{ background: ENV_COLORS[e.kind] }}>
+          {ENV_LABELS[e.kind]}
+        </span>
         <button type="button" className="icon" aria-label={t("common.delete")} onClick={onRemove}>
           ×
         </button>
@@ -259,6 +265,7 @@ function ExistingProject({ path }: { path: string }) {
           {reports.map((r) => (
             <li key={r.service}>
               {t("project.scanResult", { service: r.service, version: r.git.version, found: r.operationsFound, added: r.summary.added.length, changed: r.summary.changed.length, removed: r.summary.removed.length, errors: r.errors.length })}
+              {r.notice && <span className="warn"> — {tr(r.notice)}</span>}
             </li>
           ))}
         </ul>

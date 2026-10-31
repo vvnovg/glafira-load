@@ -26,17 +26,32 @@ fn deref(r: &Resolver, file: &str, node: &Value) -> (String, Value) {
     (file, node)
 }
 
+/// Глубина вложенных `oneOf` сообщения: самоссылка (`A.oneOf: [{$ref: A}]`) не уводит в
+/// бесконечную рекурсию.
+const MAX_ONE_OF_DEPTH: usize = 8;
+
 fn message_summary(
     r: &Resolver,
     file: &str,
     message: &Value,
     out: &mut ParseResult,
     path: &str,
+    depth: usize,
 ) -> Option<SchemaSummary> {
     let (mfile, message) = deref(r, file, message);
     if let Some(variants) = message.get("oneOf").and_then(Value::as_array) {
-        out.warn(path, None, "message oneOf: the first variant is taken");
-        return message_summary(r, &mfile, variants.first()?, out, path);
+        if depth >= MAX_ONE_OF_DEPTH {
+            out.warn(
+                path,
+                None,
+                "message oneOf is nested too deeply (a cycle?): the message is skipped",
+            );
+            return None;
+        }
+        if depth == 0 {
+            out.warn(path, None, "message oneOf: the first variant is taken");
+        }
+        return message_summary(r, &mfile, variants.first()?, out, path, depth + 1);
     }
     let payload = message.get("payload")?;
     let mut s = summarize("message", payload, false, &mfile, r, 1, &mut vec![]);
@@ -128,7 +143,7 @@ pub fn parse(input: &ContractInput, opts: &ParseOptions) -> Result<ParseResult, 
                         .unwrap_or_else(|| format!("{key} {channel}"));
                     let message = op
                         .get("message")
-                        .and_then(|m| message_summary(&r, &cfile, m, &mut out, path));
+                        .and_then(|m| message_summary(&r, &cfile, m, &mut out, path, 0));
                     push(
                         &mut out,
                         opts,
@@ -185,7 +200,7 @@ pub fn parse(input: &ContractInput, opts: &ParseOptions) -> Result<ParseResult, 
                             .and_then(|m| m.values().next())
                             .map(|m| (cfile.clone(), m.clone()))
                     })
-                    .and_then(|(f, m)| message_summary(&r, &f, &m, &mut out, path));
+                    .and_then(|(f, m)| message_summary(&r, &f, &m, &mut out, path, 0));
                 push(
                     &mut out,
                     opts,
@@ -223,6 +238,30 @@ mod tests {
     }
     fn names(s: &SchemaSummary) -> Vec<&str> {
         s.children.iter().map(|c| c.name.as_str()).collect()
+    }
+
+    #[test]
+    fn self_referencing_one_of_message_does_not_overflow_the_stack() {
+        let doc = "asyncapi: 2.6.0\ninfo: { title: x, version: '1' }\nchannels:\n  t:\n    publish:\n      message: { $ref: '#/components/messages/A' }\ncomponents:\n  messages:\n    A:\n      oneOf:\n        - $ref: '#/components/messages/A'\n";
+        let read = |_: &str| None;
+        let out = parse(
+            &ContractInput {
+                path: "asyncapi.yaml",
+                bytes: doc.as_bytes(),
+                read: &read,
+            },
+            &opts(),
+        )
+        .unwrap();
+        assert_eq!(out.operations.len(), 1);
+        assert!(out.operations[0].request.is_none());
+        assert!(
+            out.warnings
+                .iter()
+                .any(|w| w.message.contains("too deeply")),
+            "{:?}",
+            out.warnings
+        );
     }
 
     #[test]

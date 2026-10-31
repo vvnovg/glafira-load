@@ -245,7 +245,17 @@ export function RegistryPanel({ path }: { path: string }) {
           <option value="removed">{t("registry.status.removed")}</option>
         </select>
         <label>
-          <input type="checkbox" checked={diffOn} disabled={!from || !to} onChange={(e) => setDiffOn(e.target.checked)} /> {t("registry.diffToggle")}
+          <input
+            type="checkbox"
+            checked={diffOn}
+            disabled={!from || !to}
+            onChange={(e) => {
+              setDiffOn(e.target.checked);
+              // Удалённые операции по умолчанию скрыты фильтром «активные» — в диффе их отметки должны быть видны.
+              if (e.target.checked) setStatus("");
+            }}
+          />{" "}
+          {t("registry.diffToggle")}
         </label>
         <button type="button" onClick={() => setAdding(true)} disabled={!project.data || project.data.readOnly}>
           {t("registry.addManual")}

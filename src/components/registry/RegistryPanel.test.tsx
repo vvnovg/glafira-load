@@ -103,6 +103,15 @@ describe("RegistryPanel", () => {
     expect(api.registryDiff).toHaveBeenCalledWith("/p", "registry/scans/b.yaml", "registry/scans/c.yaml");
   });
 
+  it("shows removed operations while the diff is on", async () => {
+    renderWithClient(<RegistryPanel path="/p" />);
+    const status = await screen.findByLabelText("Статус");
+    expect(status).toHaveValue("active");
+    await userEvent.click(screen.getByRole("checkbox", { name: /Дифф/ }));
+    expect(status).toHaveValue("");
+    await waitFor(() => expect(api.registryList).toHaveBeenLastCalledWith("/p", expect.objectContaining({ status: undefined })));
+  });
+
   it("diffs the two scans picked in the scans list", async () => {
     renderWithClient(<RegistryPanel path="/p" />);
     await userEvent.click(await screen.findByRole("checkbox", { name: /Дифф/ }));
