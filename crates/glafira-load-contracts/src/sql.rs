@@ -13,10 +13,16 @@ fn is_ident_char(c: char) -> bool {
 }
 
 /// Если с позиции `i` начинается разделитель долларовых кавычек (`$$` или `$tag$`),
-/// возвращает его целиком. Тег — `[A-Za-z_][A-Za-z0-9_]*`; `$1` и `a$b$` разделителями не считаются.
-fn dollar_delimiter(chars: &[char], i: usize) -> Option<Vec<char>> {
+/// возвращает его целиком. Тег — `[A-Za-z_][A-Za-z0-9_]*`; `$1` и `a$b$` открывающими разделителями не считаются.
+///
+/// `open` — уже открытый разделитель: тогда ищем только его закрытие, и сравнение идёт напрямую,
+/// без проверки предыдущего символа (`END$$` и `x$tag$` закрывают строку).
+fn dollar_delimiter(chars: &[char], i: usize, open: Option<&[char]>) -> Option<Vec<char>> {
     if chars.get(i) != Some(&'$') {
         return None;
+    }
+    if let Some(open) = open {
+        return chars[i..].starts_with(open).then(|| open.to_vec());
     }
     if i > 0 && (is_ident_char(chars[i - 1]) || chars[i - 1] == '$') {
         return None;
@@ -32,17 +38,32 @@ fn dollar_delimiter(chars: &[char], i: usize) -> Option<Vec<char>> {
     (chars.get(j) == Some(&'$')).then(|| chars[i..=j].to_vec())
 }
 
-/// Разбивает текст на выражения по `;` вне кавычек (`'…'` с экранированием `\'`, `"…"`, `` `…` ``),
+/// Разбивает текст на выражения по `;` вне кавычек (`'…'`, `"…"`, `` `…` ``),
 /// `$$ … $$` / `$tag$ … $tag$` и комментариев (`-- …`, `/* … */`), с номером строки начала
 /// выражения (первый значащий символ). Ведущий BOM отбрасывается.
 ///
-/// Обратная косая в `'…'` всегда экранирует следующий символ (как в MySQL и `E'…'`); для строк
-/// PostgreSQL со стандартными правилами (`'C:\'`) это сознательное упрощение в пользу `'it\'s'`.
+/// Обратная косая: в `E'…'` она экранирует следующий символ; в обычных `'…'` — буквальный символ
+/// (`standard_conforming_strings=on`, умолчание PostgreSQL), единственное экранирование — `''`.
+/// Для файлов в стиле MySQL (`'it\'s'`): если при буквальном правиле кавычка к концу текста осталась
+/// открытой, разбор повторяется с экранированием `\` во всех `'…'`, и берётся его результат.
 fn split_statements(text: &str) -> Vec<(u32, String)> {
+    let (parts, balanced) = split_with(text, false);
+    if balanced {
+        parts
+    } else {
+        split_with(text, true).0
+    }
+}
+
+/// Один проход разбиения. `escape_all` — `\` экранирует и в обычных `'…'`.
+/// Второе значение — закрыта ли `'…'`-строка к концу текста.
+fn split_with(text: &str, escape_all: bool) -> (Vec<(u32, String)>, bool) {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut out = Vec::new();
     let (mut cur, mut start_line, mut line) = (String::new(), 1u32, 1u32);
     let (mut in_quote, mut in_ident) = (false, None::<char>);
+    // Открытая строка — `E'…'`: в ней `\` экранирует следующий символ.
+    let mut in_estr = false;
     // Открытый долларовый разделитель (`$$` или `$tag$`), которым надо закрыть строку.
     let mut in_dollar: Option<Vec<char>> = None;
     let (mut in_comment, mut in_block) = (false, false);
@@ -75,7 +96,7 @@ fn split_statements(text: &str) -> Vec<(u32, String)> {
             in_block = true;
             is_comment = true;
         } else if !is_comment {
-            if in_quote && c == '\\' {
+            if in_quote && c == '\\' && (escape_all || in_estr) {
                 // Экранированный символ внутри строки: пара не меняет состояние кавычек.
                 if let Some(n) = next {
                     if n == '\n' {
@@ -87,6 +108,12 @@ fn split_statements(text: &str) -> Vec<(u32, String)> {
                     continue;
                 }
             } else if c == '\'' && in_dollar.is_none() && in_ident.is_none() {
+                if !in_quote {
+                    // `E` не как хвост идентификатора и сразу перед кавычкой.
+                    in_estr = i > 0
+                        && matches!(chars[i - 1], 'e' | 'E')
+                        && (i < 2 || !is_ident_char(chars[i - 2]));
+                }
                 in_quote = !in_quote;
             } else if (c == '"' || c == '`') && in_dollar.is_none() && !in_quote {
                 match in_ident {
@@ -96,9 +123,7 @@ fn split_statements(text: &str) -> Vec<(u32, String)> {
                 }
             } else if c == '$' && !in_quote && in_ident.is_none() {
                 // Открытие `$tag$` или закрытие тем же разделителем; чужой `$…$` внутри — просто текст.
-                if let Some(d) = dollar_delimiter(&chars, i)
-                    && in_dollar.as_ref().is_none_or(|open| *open == d)
-                {
+                if let Some(d) = dollar_delimiter(&chars, i, in_dollar.as_deref()) {
                     if !started {
                         started = true;
                         start_line = line;
@@ -133,7 +158,7 @@ fn split_statements(text: &str) -> Vec<(u32, String)> {
     if !cur.trim().is_empty() {
         out.push((start_line, cur.trim().to_string()));
     }
-    out
+    (out, !in_quote)
 }
 
 fn parse_one(sql: &str) -> Result<Vec<Statement>, String> {
@@ -215,11 +240,16 @@ fn unsupported(kind: &str, table: &str) -> Applied {
 
 /// Предупреждение о неподдержанном изменении таблицы (общий формат для SQL и Liquibase).
 fn warn_unsupported(out: &mut ParseResult, path: &str, line: Option<u32>, kind: &str, table: &str) {
-    out.warn(
-        path,
-        line,
-        format!("unsupported table change: {kind} on {table}"),
-    );
+    let message = format!("unsupported table change: {kind} on {table}");
+    // Несколько одинаковых изменений в одном выражении (`ALTER COLUMN a, ALTER COLUMN b`) — одно предупреждение.
+    if out
+        .warnings
+        .iter()
+        .any(|w| w.path == path && w.line == line && w.message == message)
+    {
+        return;
+    }
+    out.warn(path, line, message);
 }
 
 /// Применяет выражение; результатов может быть несколько (`ALTER TABLE` с несколькими операциями).
@@ -343,15 +373,18 @@ fn parse_liquibase_xml(text: &str, path: &str, out: &mut ParseResult) -> Result<
                     t.columns.retain(|x| x.name != c);
                 }
             }
-            "dropTable" => {
-                let name = node.attribute("tableName").unwrap_or("");
-                out.tables.retain(|t| t.name != name);
-            }
-            "renameTable" => rename_table(
-                &mut out.tables,
-                node.attribute("oldTableName").unwrap_or(""),
-                node.attribute("newTableName").unwrap_or(""),
-            ),
+            "dropTable" => match node.attribute("tableName").filter(|n| !n.is_empty()) {
+                Some(name) => out.tables.retain(|t| t.name != name),
+                None => out.warn(path, line, "dropTable: missing attribute tableName"),
+            },
+            "renameTable" => match (
+                node.attribute("oldTableName").filter(|n| !n.is_empty()),
+                node.attribute("newTableName").filter(|n| !n.is_empty()),
+            ) {
+                (Some(old), Some(new)) => rename_table(&mut out.tables, old, new),
+                (None, _) => out.warn(path, line, "renameTable: missing attribute oldTableName"),
+                (_, None) => out.warn(path, line, "renameTable: missing attribute newTableName"),
+            },
             kind @ ("renameColumn" | "modifyDataType") => warn_unsupported(
                 out,
                 path,
@@ -607,8 +640,97 @@ mod tests {
 
     #[test]
     fn splitter_handles_backslash_quotes_and_backticks() {
-        let parts = split_statements("SELECT 'it\\'s; x'; SELECT E'a\\'b;c'; SELECT `a;b`;");
+        // Файл целиком сбалансирован и при буквальном правиле, но режет `'it\\'s` неверно, поэтому
+        // MySQL-вариант проверяется отдельно (`mysql_style_backslash_falls_back_to_escape_rule`).
+        let parts = split_statements("SELECT E'a\\'b;c'; SELECT `a;b`; SELECT 'it\\'s; x';");
         assert_eq!(parts.len(), 3, "{parts:?}");
+    }
+
+    #[test]
+    fn mysql_style_backslash_falls_back_to_escape_rule() {
+        // Буквальное правило оставляет кавычку открытой (`'it\'` закрывается, `x'` открывает новую),
+        // поэтому применяется правило с экранированием.
+        let parts = split_statements("SELECT 'it\\'s; x'; SELECT 1;");
+        assert_eq!(parts.len(), 2, "{parts:?}");
+        assert_eq!(parts[0].1, "SELECT 'it\\'s; x'");
+        assert_eq!(parts[1].1, "SELECT 1");
+    }
+
+    #[test]
+    fn plain_string_backslash_is_literal_in_postgres() {
+        let out = run(
+            "m.sql",
+            "INSERT INTO t VALUES ('C:\\'); CREATE TABLE u (id int);",
+        );
+        assert_eq!(names(&out), ["u"]);
+        assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+        let parts = split_statements("INSERT INTO t VALUES ('C:\\'); CREATE TABLE u (id int);");
+        assert_eq!(parts.len(), 2, "{parts:?}");
+        let parts = split_statements("SELECT regexp_replace(x, '\\', ''); SELECT 2;");
+        assert_eq!(parts.len(), 2, "{parts:?}");
+    }
+
+    #[test]
+    fn estring_backslash_escapes_quote() {
+        let parts = split_statements("SELECT E'a\\'b;c'; SELECT 2;");
+        assert_eq!(parts.len(), 2, "{parts:?}");
+        assert_eq!(parts[0].1, "SELECT E'a\\'b;c'");
+        // `E` как хвост идентификатора не делает строку E-строкой.
+        let parts = split_statements("SELECT name'a\\'; SELECT 2;");
+        assert_eq!(parts.len(), 2, "{parts:?}");
+    }
+
+    #[test]
+    fn dollar_quote_closes_when_glued_to_identifier() {
+        let out = run("m.sql", "DO $$ BEGIN x; END$$; CREATE TABLE t (id int);");
+        assert_eq!(names(&out), ["t"]);
+        let parts = split_statements("DO $$ BEGIN x; END$$; CREATE TABLE t (id int);");
+        assert_eq!(parts.len(), 2, "{parts:?}");
+        let parts = split_statements("DO $body$ BEGIN x; END$body$; CREATE TABLE t (id int);");
+        assert_eq!(parts.len(), 2, "{parts:?}");
+        assert!(parts[0].1.ends_with("END$body$"));
+        let out = run(
+            "m.sql",
+            "DO $body$ BEGIN x; END$body$; CREATE TABLE t (id int);",
+        );
+        assert_eq!(names(&out), ["t"]);
+    }
+
+    #[test]
+    fn unclosed_dollar_quote_flushes_tail_at_eof() {
+        let parts = split_statements("SELECT 1; DO $$ BEGIN x; END");
+        assert_eq!(parts.len(), 2, "{parts:?}");
+        assert_eq!(parts[1].1, "DO $$ BEGIN x; END");
+    }
+
+    #[test]
+    fn liquibase_missing_names_are_skipped_with_warning() {
+        let xml = r#"<databaseChangeLog>
+  <changeSet id="1" author="d">
+    <createTable tableName="a"><column name="id" type="int"/></createTable>
+    <dropTable/>
+    <renameTable oldTableName="a"/>
+    <renameTable newTableName="z"/>
+  </changeSet>
+</databaseChangeLog>"#;
+        let out = run("changelog.xml", xml);
+        assert_eq!(names(&out), ["a"]);
+        assert_eq!(out.warnings.len(), 3, "{:?}", out.warnings);
+        assert_eq!(out.warnings[0].line, Some(4));
+        assert!(
+            out.warnings
+                .iter()
+                .all(|w| w.message.contains("missing attribute"))
+        );
+    }
+
+    #[test]
+    fn identical_unsupported_warnings_on_one_line_collapse() {
+        let out = run(
+            "m.sql",
+            "CREATE TABLE a (x int, y int);\nALTER TABLE a ALTER COLUMN x TYPE text, ALTER COLUMN y TYPE text;",
+        );
+        assert_eq!(out.warnings.len(), 1, "{:?}", out.warnings);
     }
 
     #[test]
