@@ -37,6 +37,15 @@ test("кириллица в коде вне словарей и тестов", (
   assert.deepEqual(findCyrillic(files), ["src/a.tsx:2"]);
 });
 
+test("кириллица в коде: пути Windows с обратными косыми", () => {
+  const files = {
+    "src\\i18n\\languages.ts": "{ nativeName: \"Русский\" }\n",
+    "src\\test\\fixtures.ts": "const s = \"Данные\";\n",
+    "src\\a.tsx": "<button>Сохранить</button>\n",
+  };
+  assert.deepEqual(findCyrillic(files), ["src/a.tsx:1"]);
+});
+
 const keysOf = (r) => r.calls.map((c) => c.key).sort();
 
 test("ключи из Rust", () => {

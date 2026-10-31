@@ -249,7 +249,8 @@ export function lengthReport(dicts, { ratio = 1.6, minLength = 6, top = 15 } = {
 /** files: { path: content }. Кириллица в строках кода фронтенда вне словарей, тестов и комментариев. */
 export function findCyrillic(files) {
   const hits = [];
-  for (const [path, content] of Object.entries(files)) {
+  for (const [rawPath, content] of Object.entries(files)) {
+    const path = rawPath.split("\\").join("/"); // пути Windows
     if (/\.test\.[tj]sx?$/.test(path) || path.includes("/locales/") || path.includes("/test/")) continue;
     if (path.endsWith("src/i18n/languages.ts")) continue; // самоназвания языков — данные
     content.split("\n").forEach((line, i) => {
@@ -717,6 +718,9 @@ export function checkChangelogs(files, extra = []) {
   return problems;
 }
 
+/** Путь относительно base с прямыми косыми на любой ОС: проверки сравнивают пути с `src/...`. */
+const rel = (base, p) => relative(base, p).split(sep).join("/");
+
 function walk(dir, exts, out = []) {
   for (const name of readdirSync(dir)) {
     const p = join(dir, name);
@@ -746,17 +750,17 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   problems.push(...checkLanguageFiles(codes, Object.keys(dicts), { requireAll: process.argv.includes("--require-all-languages") }));
   if (process.argv.includes("--lengths")) for (const line of lengthReport(dicts)) console.log(`↔ ${line}`);
   const rustFiles = Object.fromEntries(
-    walk(join(root, "src-tauri/src"), [".rs"]).map((p) => [relative(root, p), readFileSync(p, "utf8")]),
+    walk(join(root, "src-tauri/src"), [".rs"]).map((p) => [rel(root, p), readFileSync(p, "utf8")]),
   );
   const rust = rustKeys(rustFiles);
   problems.push(...rust.problems, ...checkRustKeys(rust.calls, flatten(dicts.en)));
   const srcFiles = Object.fromEntries(
-    walk(join(root, "src"), [".ts", ".tsx"]).map((p) => [relative(root, p), readFileSync(p, "utf8")]),
+    walk(join(root, "src"), [".ts", ".tsx"]).map((p) => [rel(root, p), readFileSync(p, "utf8")]),
   );
   problems.push(...checkFrontendKeys(frontendKeys(srcFiles), flatten(dicts.en)));
   problems.push(...checkHints(hintKeys(srcFiles), flatten(dicts.en)));
   const guideDir = join(root, "docs/guide");
-  const guideFiles = Object.fromEntries(walk(guideDir, [".md"]).map((p) => [relative(guideDir, p).split(sep).join("/"), readFileSync(p, "utf8")]));
+  const guideFiles = Object.fromEntries(walk(guideDir, [".md"]).map((p) => [rel(guideDir, p), readFileSync(p, "utf8")]));
   const langFlat = Object.fromEntries(Object.entries(dicts).map(([c, d]) => [c, flatten(d)]));
   problems.push(...checkGuide(guideFiles, codes, flatten(dicts.en), GUIDE_CHAPTERS, langFlat));
   const changelogDir = join(root, "docs/changelog");
