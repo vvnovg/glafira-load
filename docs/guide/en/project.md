@@ -11,6 +11,7 @@ an existing repository or initialize one yourself. The folder holds:
 - `glafira-load.yaml` — the manifest: the project name, services and stands;
 - `registry/operations.yaml` — the operation registry ([Operation registry](registry.md));
 - `registry/scans/<date-time>.yaml` — a snapshot of every scan, for the diff;
+- `registry/tables/<service>.yaml` — tables and columns found in the migrations of a service;
 - `load/prod-load.yaml` — the production-load figures ([Production load](prod-load.md));
 - `load/imports/<date-time>.xlsx` — a copy of every imported template;
 - `load/profile.yaml` — coefficients and load profiles ([Load profile](profile.md));
