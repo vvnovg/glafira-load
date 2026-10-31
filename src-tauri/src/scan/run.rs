@@ -1,13 +1,15 @@
 //! Разбор сервиса: контракты → черновики → слияние → снимок (спека L1 §5.3, §6.3).
 //!
-//! Разбор не удался (нет папки клона) или отменён — реестр, снимок и таблицы не пишутся:
-//! слияние с пустым списком черновиков пометило бы все операции сервиса удалёнными. Файл
+//! Разбор не удался (нет папки клона), отменён или ни один найденный контракт не разобран —
+//! реестр, снимок и таблицы не пишутся: слияние с пустым списком черновиков пометило бы все
+//! операции сервиса удалёнными. Сервис, у которого контрактов не нашлось вовсе, сливается как
+//! обычно (с пустым списком черновиков). Файл
 //! контракта, который не читается или не разбирается, — диагностика в отчёте, остальные
 //! контракты разбираются; ошибкой разбор завершается только при сбое чтения или записи файлов
 //! самого проекта.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -24,6 +26,7 @@ use serde::Serialize;
 
 use crate::error::{AppResult, ErrorCode};
 use crate::git::version::GitVersion;
+use crate::i18n::LocalizedText;
 use crate::project::manifest::ProjectDir;
 use crate::project::paths::{canonical, inside, relative, resolve};
 use crate::scan::discover::discover;
@@ -58,9 +61,12 @@ pub struct ScanReport {
     /// Файлы контрактов, которые не прочитаны или не разобраны (`CONTRACT_PARSE`): разбор
     /// остальных продолжается.
     pub errors: Vec<Diagnostic>,
-    /// `registry/scans/<метка>.yaml`; пусто, если реестр не менялся (разбор отменён или нет клона).
+    /// `registry/scans/<метка>.yaml`; пусто, если реестр не менялся (разбор отменён, нет клона
+    /// или ни один контракт не разобран).
     pub scan_file: String,
     pub cancelled: bool,
+    /// Почему реестр не менялся (ни один контракт не разобран) — для заметной строки в отчёте.
+    pub notice: Option<LocalizedText>,
 }
 
 pub fn now_rfc3339() -> String {
@@ -148,6 +154,7 @@ pub fn scan_service_blocking(
         errors: Vec::new(),
         scan_file: String::new(),
         cancelled: false,
+        notice: None,
     };
     let clone = match dir.service_root(&manifest, service_id) {
         Ok(p) => canonical(&p)?,
@@ -234,6 +241,7 @@ pub fn scan_service_blocking(
     let total = contracts.len() + outside;
     report.contracts = total;
     let (mut drafts, mut tables) = (Vec::new(), Vec::<Table>::new());
+    let mut parsed_ok = 0usize;
     for (i, c) in contracts.iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
             report.cancelled = true;
@@ -268,6 +276,7 @@ pub fn scan_service_blocking(
         };
         match parsed {
             Ok(r) => {
+                parsed_ok += 1;
                 drafts.extend(r.operations);
                 if c.kind == ContractKind::Sql {
                     tables = r.tables;
@@ -298,6 +307,16 @@ pub fn scan_service_blocking(
     if report.cancelled {
         return Ok(report);
     }
+    // Контракты были, но ни один не разобран: слияние пометило бы все операции удалёнными.
+    if total > 0 && parsed_ok == 0 {
+        let notice = ltext!(
+            "errors.scan.nothingParsed",
+            "No contract could be parsed; registry left unchanged"
+        );
+        report.warnings.push(diag("", None, notice.text.clone()));
+        report.notice = Some(notice);
+        return Ok(report);
+    }
 
     let seen = Seen {
         version: git.version.clone(),
@@ -305,27 +324,8 @@ pub fn scan_service_blocking(
         at: now_rfc3339(),
     };
     let mut registry = dir.registry()?;
-    // Версия не изменилась — `last_seen` остаётся прежним: повторный разбор без изменений не
-    // меняет файл реестра (дифф в git только по существу).
-    let before: HashMap<String, Seen> = registry
-        .operations
-        .iter()
-        .filter(|o| o.draft.service == service_id)
-        .map(|o| (o.draft.id.clone(), o.last_seen.clone()))
-        .collect();
+    // Правило `last_seen` (повторный разбор той же версии не меняет файл) — внутри `merge`.
     report.summary = merge(&mut registry, service_id, drafts, &seen);
-    for op in registry
-        .operations
-        .iter_mut()
-        .filter(|o| o.draft.service == service_id)
-    {
-        if let Some(old) = before.get(&op.draft.id)
-            && old.version == op.last_seen.version
-            && old.commit == op.last_seen.commit
-        {
-            op.last_seen = old.clone();
-        }
-    }
     dir.save_registry(&registry)?;
     let scan = Scan {
         format: SCAN_FORMAT,
@@ -484,7 +484,66 @@ mod tests {
         assert_eq!(r.errors.len(), 2, "{:?}", r.errors);
         assert!(r.errors[0].message.contains("outside"));
         assert_eq!(r.operations_found, 0);
-        assert!(!r.scan_file.is_empty(), "ошибки файлов не роняют разбор");
+        assert!(
+            r.scan_file.is_empty(),
+            "ни один контракт не разобран — реестр не трогаем"
+        );
+        assert_eq!(
+            r.notice.as_ref().map(|n| n.key.as_str()),
+            Some("errors.scan.nothingParsed")
+        );
+        assert!(
+            r.warnings
+                .iter()
+                .any(|w| w.message.contains("No contract could be parsed")),
+            "{:?}",
+            r.warnings
+        );
+    }
+
+    #[test]
+    fn scan_where_every_contract_fails_leaves_the_registry_byte_identical() {
+        let tmp = tempfile::tempdir().unwrap();
+        let clone = tmp.path().join("clone");
+        std::fs::create_dir_all(clone.join("schemas")).unwrap();
+        for f in ["openapi.yaml", "schemas/order.yaml"] {
+            std::fs::copy(format!("{}/orders-openapi/{f}", fixtures()), clone.join(f)).unwrap();
+        }
+        let (_p, d) = project_with(clone.to_str().unwrap(), vec![]);
+        assert_eq!(scan(&d).summary.added.len(), 2);
+        let before = d.read_text("registry/operations.yaml").unwrap().unwrap();
+        let tables_before = d.read_text("registry/tables/orders.yaml").unwrap();
+        let snapshots = std::fs::read_dir(d.file(SCANS_DIR)).unwrap().count();
+        // Контракт сломан: найден, но не разбирается.
+        std::fs::write(clone.join("openapi.yaml"), "openapi: [: not yaml").unwrap();
+        let r = scan(&d);
+        assert_eq!(r.contracts, 1);
+        assert_eq!(r.errors.len(), 1, "{:?}", r.errors);
+        assert!(r.scan_file.is_empty() && !r.cancelled);
+        assert!(r.summary.removed.is_empty());
+        assert_eq!(
+            d.read_text("registry/operations.yaml").unwrap().unwrap(),
+            before,
+            "операции не помечены удалёнными"
+        );
+        assert_eq!(
+            d.read_text("registry/tables/orders.yaml").unwrap(),
+            tables_before
+        );
+        assert_eq!(
+            std::fs::read_dir(d.file(SCANS_DIR)).unwrap().count(),
+            snapshots
+        );
+    }
+
+    #[test]
+    fn service_without_contracts_still_merges() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_p, d) = project_with(tmp.path().to_str().unwrap(), vec![]);
+        let r = scan(&d);
+        assert_eq!(r.contracts, 0);
+        assert!(r.notice.is_none());
+        assert!(!r.scan_file.is_empty());
     }
 
     #[test]

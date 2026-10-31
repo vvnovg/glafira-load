@@ -6,7 +6,7 @@ import { useWorkspace } from "../../state/workspace";
 import { ServicePanel } from "./ServicePanel";
 
 // vi.mock поднимается над импортами — объект мока создаётся там же через vi.hoisted.
-const { api, state } = vi.hoisted(() => {
+const { api, state, report } = vi.hoisted(() => {
   const state = {
     project: {
       path: "/p/orders",
@@ -27,6 +27,7 @@ const { api, state } = vi.hoisted(() => {
     errors: [{ path: "proto/x.proto", line: 7, message: "identifier expected" }],
     scanFile: "registry/scans/2026-10-31-120000.yaml",
     cancelled: false,
+    notice: null as null | { key: string; params: Record<string, string>; text: string },
   };
   const api = {
     projectView: vi.fn(async () => state.project),
@@ -42,7 +43,7 @@ const { api, state } = vi.hoisted(() => {
     scanCancel: vi.fn(async () => undefined),
     openPath: vi.fn(async () => undefined),
   };
-  return { api, state };
+  return { api, state, report };
 });
 vi.mock("../../api/client", () => ({ api, toAppError: (e: unknown) => e }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(async () => "/p/orders-service/src/new.proto") }));
@@ -83,6 +84,23 @@ describe("ServicePanel", () => {
     expect(api.openPath).toHaveBeenCalledWith("/p/orders", "/p/orders/registry/scans/2026-10-31-120000.yaml");
     await userEvent.click(screen.getByRole("button", { name: "Открыть реестр" }));
     expect(useWorkspace.getState().tabs.map((t) => t.id)).toEqual(["registry:/p/orders"]);
+  });
+
+  it("shows why the registry was left unchanged when no contract parsed", async () => {
+    api.serviceScan.mockResolvedValueOnce([
+      {
+        ...report,
+        operationsFound: 0,
+        summary: { added: [], changed: [], removed: [], restored: [], unchanged: 0 },
+        scanFile: "",
+        notice: { key: "errors.scan.nothingParsed", params: {}, text: "No contract could be parsed; registry left unchanged" },
+      },
+    ]);
+    renderWithClient(<ServicePanel path="/p/orders" serviceId="orders" />);
+    await screen.findByLabelText("proto/x.proto");
+    await userEvent.click(screen.getByRole("button", { name: "Разобрать" }));
+    expect(await screen.findByText("Ни один контракт не разобран — реестр не изменён")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Открыть снимок разбора" })).toBeNull();
   });
 
   it("edits kind, include and removes a contract of an explicit list", async () => {

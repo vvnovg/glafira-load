@@ -61,7 +61,8 @@
       "readOnly": "Project is read-only until its manifest is fixed: {{path}}"
     },
     "scan": {
-      "busy": "A scan is already running in this project"
+      "busy": "A scan is already running in this project",
+      "nothingParsed": "No contract could be parsed; registry left unchanged"
     },
     "registry": {
       "notFound": "Operation {{id}} not found",

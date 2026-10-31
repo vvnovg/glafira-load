@@ -203,6 +203,8 @@ export interface ScanReport {
   errors: Diagnostic[];
   scanFile: string;
   cancelled: boolean;
+  /** Почему реестр не менялся (ни один контракт не разобран). */
+  notice: LocalizedText | null;
 }
 export interface OperationRow { id: string; service: string; kind: OpKind; name: string; summary: string; source: SourceKind; status: Status; lastVersion: string; topicGuessed: boolean }
 export interface RegistryFilter { service?: string; kind?: OpKind; source?: SourceKind; status?: Status; query?: string }

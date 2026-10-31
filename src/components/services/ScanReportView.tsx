@@ -4,6 +4,7 @@ import { api } from "../../api/client";
 import type { Diagnostic, ScanReport } from "../../api/types";
 import { joinProjectPath } from "../../lib/paths";
 import { useWorkspace } from "../../state/workspace";
+import { tr } from "../../i18n/text";
 import { ErrorBanner } from "../common/ErrorBanner";
 
 /** Диагностики, сгруппированные по файлу (в порядке первого появления). */
@@ -59,8 +60,9 @@ export function ScanReportView({ report, project, clone }: { report: ScanReport;
         <p className="warn">{t("service.gitUnavailable", { error: report.git.error ?? "" })}</p>
       )}
       {report.cancelled && <p className="warn">{t("service.cancelled")}</p>}
+      {report.notice && <p className="warn">{tr(report.notice)}</p>}
       <p>{t("service.counts", { contracts: report.contracts, found: report.operationsFound, tables: report.tablesFound })}</p>
-      {!report.cancelled && <p>{t("service.summary", { added: s.added.length, changed: s.changed.length, removed: s.removed.length, restored: s.restored.length, unchanged: s.unchanged })}</p>}
+      {!report.cancelled && !report.notice && <p>{t("service.summary", { added: s.added.length, changed: s.changed.length, removed: s.removed.length, restored: s.restored.length, unchanged: s.unchanged })}</p>}
       <DiagnosticList items={report.errors} project={project} clone={clone} title={t("service.errors")} open />
       <DiagnosticList items={report.warnings} project={project} clone={clone} title={t("service.warnings")} open={false} />
       {!report.cancelled && report.scanFile && (

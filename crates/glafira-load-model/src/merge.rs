@@ -36,6 +36,13 @@ impl MergeSummary {
 /// Сливает черновики одного сервиса в реестр. Черновик чужого сервиса и повтор `id` в одном
 /// разборе пропускаются (первый побеждает). Идемпотентно: повторное слияние тех же черновиков
 /// даёт пустую сводку и тот же файл.
+///
+/// Правило `last_seen`: у неизменившейся операции (тот же отпечаток), у которой сохранённые
+/// `last_seen.version` и `last_seen.commit` совпадают с `seen`, `last_seen` остаётся прежним —
+/// повторный разбор той же версии не меняет файл реестра (в том числе время `at`). Во всех
+/// остальных случаях — новая версия или коммит, изменившаяся, восстановленная или новая
+/// операция — `last_seen = seen`. Так у клона без версии (`unversioned`) или грязного дерева
+/// изменившаяся операция всё равно получает свежий `last_seen`.
 pub fn merge(
     registry: &mut Registry,
     service: &str,
@@ -86,9 +93,13 @@ pub fn merge(
                         });
                     }
                 }
+                let same_version =
+                    op.last_seen.version == seen.version && op.last_seen.commit == seen.commit;
                 op.draft = draft;
                 op.fingerprint = fp;
-                op.last_seen = seen.clone();
+                if changed || was_removed || !same_version {
+                    op.last_seen = seen.clone();
+                }
                 op.status = Status::Active;
                 if was_removed {
                     summary.restored.push(id);
@@ -242,6 +253,111 @@ mod tests {
         assert!(s.removed.is_empty());
         assert_eq!(r.operations.len(), 2);
         assert!(r.operations.iter().all(|o| o.status == Status::Active));
+    }
+
+    fn seen_at(v: &str, commit: &str, at: &str) -> Seen {
+        Seen {
+            version: v.into(),
+            commit: commit.into(),
+            at: at.into(),
+        }
+    }
+
+    const ID: &str = "http:orders:POST /a";
+
+    fn body() -> Option<SchemaSummary> {
+        Some(SchemaSummary::leaf("body", "object"))
+    }
+
+    #[test]
+    fn unchanged_operation_with_the_same_version_keeps_last_seen() {
+        let mut r = Registry::default();
+        merge(
+            &mut r,
+            "orders",
+            vec![http("/a", None)],
+            &seen_at("v1", "c1", "t1"),
+        );
+        let s = merge(
+            &mut r,
+            "orders",
+            vec![http("/a", None)],
+            &seen_at("v1", "c1", "t2"),
+        );
+        assert_eq!(s.unchanged, 1);
+        assert_eq!(r.get(ID).unwrap().last_seen, seen_at("v1", "c1", "t1"));
+    }
+
+    #[test]
+    fn unchanged_operation_with_a_new_commit_updates_last_seen() {
+        let mut r = Registry::default();
+        merge(
+            &mut r,
+            "orders",
+            vec![http("/a", None)],
+            &seen_at("v1", "c1", "t1"),
+        );
+        merge(
+            &mut r,
+            "orders",
+            vec![http("/a", None)],
+            &seen_at("v1", "c2", "t2"),
+        );
+        assert_eq!(r.get(ID).unwrap().last_seen, seen_at("v1", "c2", "t2"));
+    }
+
+    #[test]
+    fn changed_operation_with_the_same_version_updates_last_seen() {
+        let mut r = Registry::default();
+        merge(
+            &mut r,
+            "orders",
+            vec![http("/a", None)],
+            &seen_at("v1", "c1", "t1"),
+        );
+        let s = merge(
+            &mut r,
+            "orders",
+            vec![http("/a", body())],
+            &seen_at("v1", "c1", "t2"),
+        );
+        assert_eq!(s.changed.len(), 1);
+        assert_eq!(r.get(ID).unwrap().last_seen, seen_at("v1", "c1", "t2"));
+    }
+
+    #[test]
+    fn unversioned_clone_with_a_changed_operation_updates_last_seen() {
+        let mut r = Registry::default();
+        let first = seen_at("unversioned", "", "t1");
+        merge(
+            &mut r,
+            "orders",
+            vec![http("/a", None), http("/b", None)],
+            &first,
+        );
+        let second = seen_at("unversioned", "", "t2");
+        merge(
+            &mut r,
+            "orders",
+            vec![http("/a", body()), http("/b", None)],
+            &second,
+        );
+        assert_eq!(r.get(ID).unwrap().last_seen, second);
+        assert_eq!(
+            r.get("http:orders:POST /b").unwrap().last_seen,
+            first,
+            "неизменившаяся операция той же версии"
+        );
+        // Восстановленная операция той же версии тоже получает новый `last_seen`.
+        merge(&mut r, "orders", vec![http("/a", body())], &second);
+        let third = seen_at("unversioned", "", "t3");
+        merge(
+            &mut r,
+            "orders",
+            vec![http("/a", body()), http("/b", None)],
+            &third,
+        );
+        assert_eq!(r.get("http:orders:POST /b").unwrap().last_seen, third);
     }
 
     #[test]
