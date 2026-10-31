@@ -206,11 +206,8 @@ mod tests {
 
     #[test]
     fn documented_examples_parse() {
+        // Примеры для администраторов из `docs/admin/` (на них ссылается `docs/admin.md`).
         let base = concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/admin");
-        // Примеры `docs/admin/policy.*` появляются в задаче документации; до неё проверять нечего.
-        if !Path::new(base).is_dir() {
-            return;
-        }
         let json = read_json_file(Path::new(&format!("{base}/policy.json")));
         let p = crate::policy::resolve("doc", json);
         assert!(p.status.errors.is_empty(), "{:?}", p.status.errors);

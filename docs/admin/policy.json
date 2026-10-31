@@ -1,0 +1,5 @@
+{
+  "updatesEnabled": false,
+  "updateUrl": "https://mirror.example.corp/glafira-load/latest.json",
+  "language": "en"
+}
