@@ -196,23 +196,52 @@ pub struct Computed {
 pub enum ProfileError {
     #[error("profile not found: {0}")]
     UnknownProfile(String),
+    /// Значение в `profile.yaml` не конечное или вне допустимого диапазона.
+    /// `field` — путь к полю, например `phases[2].step_pct` или `coefficients.k_env`.
+    #[error("invalid profile value: {field} = {value}")]
+    InvalidValue { field: String, value: String },
+    /// Фаза `Steps` дала бы больше `max` ступеней.
+    #[error("too many steps in phase {phase}: limit is {max}")]
+    TooManySteps { phase: usize, max: usize },
+}
+
+/// Верхняя граница числа ступеней одной фазы `Steps`.
+pub const MAX_STEPS: usize = 1000;
+
+fn check(ok: bool, field: impl FnOnce() -> String, value: f64) -> Result<(), ProfileError> {
+    if ok {
+        Ok(())
+    } else {
+        Err(ProfileError::InvalidValue {
+            field: field(),
+            value: value.to_string(),
+        })
+    }
+}
+
+/// Конечное неотрицательное число.
+fn non_negative(field: impl FnOnce() -> String, value: f64) -> Result<(), ProfileError> {
+    check(value.is_finite() && value >= 0.0, field, value)
 }
 
 /// Ряд «минута → % цели». Начинается с (0, 0); у ступеней скачок — две точки с одной минутой.
-pub fn timeline(phases: &[Phase]) -> Vec<Point> {
+pub fn timeline(phases: &[Phase]) -> Result<Vec<Point>, ProfileError> {
     let mut out = vec![Point {
         minute: 0.0,
         pct: 0.0,
     }];
     let (mut t, mut pct) = (0.0, 0.0);
-    for phase in phases {
+    for (i, phase) in phases.iter().enumerate() {
         match *phase {
             Phase::Ramp { minutes, to_pct } => {
+                non_negative(|| format!("phases[{i}].minutes"), minutes)?;
+                check(to_pct.is_finite(), || format!("phases[{i}].to_pct"), to_pct)?;
                 t += minutes;
                 pct = to_pct;
                 out.push(Point { minute: t, pct });
             }
             Phase::Steady { minutes } => {
+                non_negative(|| format!("phases[{i}].minutes"), minutes)?;
                 t += minutes;
                 out.push(Point { minute: t, pct });
             }
@@ -221,11 +250,28 @@ pub fn timeline(phases: &[Phase]) -> Vec<Point> {
                 step_minutes,
                 max_pct,
             } => {
-                if step_pct <= 0.0 || step_minutes <= 0.0 {
-                    continue;
+                check(
+                    step_pct.is_finite() && step_pct > 0.0,
+                    || format!("phases[{i}].step_pct"),
+                    step_pct,
+                )?;
+                non_negative(|| format!("phases[{i}].step_minutes"), step_minutes)?;
+                check(
+                    max_pct.is_finite(),
+                    || format!("phases[{i}].max_pct"),
+                    max_pct,
+                )?;
+                // Число ступеней считаем сразу: уровни — `step_pct * n`, без накопления
+                // ошибки округления, а длину ряда ограничиваем `MAX_STEPS`.
+                let steps = ((max_pct + 1e-9) / step_pct).floor();
+                if steps > MAX_STEPS as f64 {
+                    return Err(ProfileError::TooManySteps {
+                        phase: i,
+                        max: MAX_STEPS,
+                    });
                 }
-                let mut level = step_pct;
-                while level <= max_pct + 1e-9 {
+                for n in 1..=(steps.max(0.0) as usize) {
+                    let level = step_pct * n as f64;
                     out.push(Point {
                         minute: t,
                         pct: level,
@@ -235,13 +281,12 @@ pub fn timeline(phases: &[Phase]) -> Vec<Point> {
                         minute: t,
                         pct: level,
                     });
-                    level += step_pct;
                 }
                 pct = out.last().map(|p| p.pct).unwrap_or(pct);
             }
         }
     }
-    out
+    Ok(out)
 }
 
 pub fn compute(
@@ -254,6 +299,11 @@ pub fn compute(
         .profiles
         .get(name)
         .ok_or_else(|| ProfileError::UnknownProfile(name.into()))?;
+    non_negative(|| "coefficients.k_env".into(), file.coefficients.k_env)?;
+    non_negative(
+        || "coefficients.k_growth".into(),
+        file.coefficients.k_growth,
+    )?;
     let mut targets = Vec::new();
     let mut uncovered = Vec::new();
     for op in registry
@@ -272,6 +322,11 @@ pub fn compute(
         let (k_env, k_growth) = file
             .coefficients
             .for_operation(&op.draft.service, &op.draft.id);
+        non_negative(|| format!("coefficients for {}: k_env", op.draft.id), k_env)?;
+        non_negative(
+            || format!("coefficients for {}: k_growth", op.draft.id),
+            k_growth,
+        )?;
         targets.push(Target {
             id: op.draft.id.clone(),
             service: op.draft.service.clone(),
@@ -289,7 +344,7 @@ pub fn compute(
             t.share = t.target / total;
         }
     }
-    let timeline = timeline(&profile.phases);
+    let timeline = timeline(&profile.phases)?;
     let total_minutes = timeline.last().map(|p| p.minute).unwrap_or(0.0);
     Ok(Computed {
         profile: name.into(),
@@ -430,7 +485,8 @@ mod tests {
                 minutes: 5.0,
                 to_pct: 0.0,
             },
-        ]);
+        ])
+        .unwrap();
         let m: Vec<(f64, f64)> = pts.iter().map(|p| (p.minute, p.pct)).collect();
         assert_eq!(
             m,
@@ -449,12 +505,100 @@ mod tests {
         );
         assert!(pts.windows(2).all(|w| w[1].minute >= w[0].minute));
         assert_eq!(
-            timeline(&[]),
+            timeline(&[]).unwrap(),
             vec![Point {
                 minute: 0.0,
                 pct: 0.0
             }]
         );
+    }
+
+    fn steps(step_pct: f64, max_pct: f64) -> Phase {
+        Phase::Steps {
+            step_pct,
+            step_minutes: 1.0,
+            max_pct,
+        }
+    }
+
+    #[test]
+    fn timeline_rejects_non_finite_max_pct() {
+        for bad in [f64::INFINITY, f64::NAN] {
+            assert!(matches!(
+                timeline(&[steps(10.0, bad)]),
+                Err(ProfileError::InvalidValue { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn timeline_rejects_bad_step_pct_and_minutes() {
+        for bad in [0.0, -1.0, f64::INFINITY, f64::NAN] {
+            assert!(matches!(
+                timeline(&[steps(bad, 100.0)]),
+                Err(ProfileError::InvalidValue { .. })
+            ));
+        }
+        for bad in [-1.0, f64::INFINITY, f64::NAN] {
+            assert!(timeline(&[Phase::Steady { minutes: bad }]).is_err());
+            assert!(
+                timeline(&[Phase::Ramp {
+                    minutes: bad,
+                    to_pct: 10.0
+                }])
+                .is_err()
+            );
+        }
+        let err = timeline(&[Phase::Steady { minutes: 1.0 }, steps(-5.0, 100.0)]).unwrap_err();
+        assert!(
+            matches!(&err, ProfileError::InvalidValue { field, .. } if field == "phases[1].step_pct"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn timeline_rejects_too_many_steps() {
+        assert_eq!(
+            timeline(&[steps(1e-9, 300.0)]).unwrap_err(),
+            ProfileError::TooManySteps {
+                phase: 0,
+                max: MAX_STEPS
+            }
+        );
+        // Ровно MAX_STEPS ступеней ещё допустимо.
+        let pts = timeline(&[steps(1.0, MAX_STEPS as f64)]).unwrap();
+        assert_eq!(pts.len(), 1 + 2 * MAX_STEPS);
+        assert!(timeline(&[steps(1.0, MAX_STEPS as f64 + 1.0)]).is_err());
+    }
+
+    #[test]
+    fn fractional_step_has_exact_levels() {
+        let pts = timeline(&[steps(0.1, 1.0)]).unwrap();
+        assert_eq!(pts.len(), 1 + 2 * 10);
+        for n in 1..=10usize {
+            let expected = 0.1 * n as f64;
+            assert_eq!(pts[2 * n - 1].pct, expected);
+            assert_eq!(pts[2 * n].pct, expected);
+        }
+    }
+
+    #[test]
+    fn compute_rejects_bad_coefficients() {
+        for (k_env, k_growth, field) in [
+            (-1.0, 1.0, "coefficients.k_env"),
+            (f64::INFINITY, 1.0, "coefficients.k_env"),
+            (1.0, -0.5, "coefficients.k_growth"),
+            (1.0, f64::NAN, "coefficients.k_growth"),
+        ] {
+            let mut f = ProfileFile::default();
+            f.coefficients.k_env = k_env;
+            f.coefficients.k_growth = k_growth;
+            let err = compute(&f, "nominal", &registry(), &prod()).unwrap_err();
+            assert!(
+                matches!(&err, ProfileError::InvalidValue { field: got, .. } if got == field),
+                "{err}"
+            );
+        }
     }
 
     #[test]
