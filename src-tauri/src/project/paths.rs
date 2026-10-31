@@ -118,7 +118,9 @@ mod tests {
         assert_eq!(e.code, ErrorCode::PathOutsideProject);
         assert_eq!(relative(base, &base.join("a/b/f.txt")), "a/b/f.txt");
         assert_eq!(resolve(base, "a"), base.join("a"));
-        assert_eq!(resolve(base, "/abs"), PathBuf::from("/abs"));
+        // Абсолютный путь своей платформы: `/abs` на Windows не абсолютный (нет диска).
+        let abs = std::env::temp_dir();
+        assert_eq!(resolve(base, abs.to_str().unwrap()), abs);
     }
 
     #[test]

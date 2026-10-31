@@ -391,10 +391,10 @@ mod tests {
         (dir, d)
     }
 
+    /// Через `dunce`: `std::fs::canonicalize` на Windows даёт `\\?\`, а с таким префиксом
+    /// Windows не принимает прямые косые, которыми тесты приклеивают имена фикстур.
     fn fixtures() -> String {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../dev/fixtures")
-            .canonicalize()
+        dunce::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../dev/fixtures"))
             .unwrap()
             .to_string_lossy()
             .into_owned()

@@ -344,13 +344,14 @@ mod tests {
     }
 
     fn fixture(name: &str) -> String {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../dev/fixtures")
-            .join(name)
-            .canonicalize()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned()
+        dunce::canonicalize(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../dev/fixtures")
+                .join(name),
+        )
+        .unwrap()
+        .to_string_lossy()
+        .into_owned()
     }
 
     fn scan(path: &str) {
