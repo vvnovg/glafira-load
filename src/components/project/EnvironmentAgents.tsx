@@ -133,19 +133,29 @@ export function EnvironmentAgents({
   const ids = agents.map((a) => a.id);
   // Устойчивые ключи строк: не зависят ни от индекса, ни от редактируемого id, поэтому введённый токен
   // остаётся у своего агента при удалении соседних строк. Ключи идут параллельно `agents`: добавление и
-  // удаление правят их здесь же, а если список подменили снаружи (перечитан черновик) — дополняем или обрезаем.
+  // удаление правят их здесь же. Если список подменили снаружи (не наши add/remove/update) — выдаём все ключи
+  // заново, чтобы ни одна строка не унаследовала состояние чужой.
   const rowKeys = useRef<number[]>([]);
   const nextKey = useRef(0);
+  const known = useRef<Agent[] | null>(null);
+  if (known.current !== agents) {
+    if (known.current !== null) rowKeys.current = [];
+    known.current = agents;
+  }
   while (rowKeys.current.length < agents.length) rowKeys.current.push(nextKey.current++);
   rowKeys.current.length = agents.length;
-  const update = (i: number, patch: Partial<Agent>) => onChange(agents.map((a, j) => (j === i ? { ...a, ...patch } : a)));
+  const emit = (next: Agent[]) => {
+    known.current = next;
+    onChange(next);
+  };
+  const update = (i: number, patch: Partial<Agent>) => emit(agents.map((a, j) => (j === i ? { ...a, ...patch } : a)));
   const add = () => {
     rowKeys.current.push(nextKey.current++);
-    onChange([...agents, { id: "", url: "", weight: 1 }]);
+    emit([...agents, { id: "", url: "", weight: 1 }]);
   };
   const remove = (i: number) => {
     rowKeys.current.splice(i, 1);
-    onChange(agents.filter((_, j) => j !== i));
+    emit(agents.filter((_, j) => j !== i));
   };
   return (
     <section className="agents">

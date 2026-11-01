@@ -242,10 +242,16 @@ function ExistingProject({ path }: { path: string }) {
   // иначе состояние формы агентов (введённый токен) переезжало бы к соседнему стенду при удалении строки выше.
   const envKeys = useRef<number[]>([]);
   const nextEnvKey = useRef(0);
+  // Подмена черновика снаружи (перечитан манифест, «Отменить правки»): строки уже не те, что были, поэтому все ключи
+  // выдаются заново — иначе старый ключ по позиции достался бы другой строке вместе с её введённым токеном.
+  const replaceDraft = (m: Manifest) => {
+    envKeys.current = [];
+    setDraft(m);
+  };
   const [progress, setProgress] = useState<ScanProgress | null>(null);
   const [reports, setReports] = useState<ScanReport[]>([]);
   useEffect(() => {
-    if (q.data) setDraft(cloneManifest(q.data.manifest));
+    if (q.data) replaceDraft(cloneManifest(q.data.manifest));
   }, [q.data]);
   const save = useMutation({
     mutationFn: (m: Manifest) => api.projectSave(path, m),
@@ -394,7 +400,7 @@ function ExistingProject({ path }: { path: string }) {
           <button type="button" className="primary" disabled={!dirty || problems.length > 0 || save.isPending} onClick={() => save.mutate(draft)}>
             {t("common.save")}
           </button>
-          <button type="button" disabled={!dirty} onClick={() => setDraft(cloneManifest(p.manifest))}>
+          <button type="button" disabled={!dirty} onClick={() => replaceDraft(cloneManifest(p.manifest))}>
             {t("project.revert")}
           </button>
         </div>

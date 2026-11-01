@@ -168,4 +168,25 @@ describe("ProjectPanel", () => {
       api.projectView.mockImplementation(defaultView ?? (async () => view));
     }
   });
+
+  it("does not carry a typed agent token over to another stand after the edits are reverted", async () => {
+    const view = await api.projectView();
+    const agent = (id: string) => ({ id, url: `http://${id}:7420`, weight: 1 });
+    const three = { ...view, missingServices: [], manifest: { ...view.manifest, environments: ["test", "stage", "prod"].map((id, i) => ({ id, kind: "test", http: "https://t", agents: [agent(`gen-${i + 1}`)] })) } };
+    const defaultView = api.projectView.getMockImplementation();
+    api.projectView.mockImplementation(async () => three);
+    try {
+      renderWithClient(<ProjectPanel path="/p/orders" />);
+      await userEvent.type(await screen.findByLabelText("Токен агента gen-2"), "s3cret");
+      await userEvent.click(screen.getAllByRole("button", { name: "Удалить" })[1]);
+      await userEvent.click(screen.getByRole("button", { name: "Отменить правки" }));
+      // Стенды вернулись из сохранённого манифеста: ни у одного нет чужого введённого токена.
+      const fields = screen.getAllByLabelText(/Токен агента/);
+      expect(fields).toHaveLength(3);
+      for (const f of fields) expect(f).toHaveValue("");
+      expect(api.agentSetToken).not.toHaveBeenCalled();
+    } finally {
+      api.projectView.mockImplementation(defaultView ?? (async () => view));
+    }
+  });
 });

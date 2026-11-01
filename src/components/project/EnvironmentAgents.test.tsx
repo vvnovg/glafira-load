@@ -26,16 +26,21 @@ const initial: Agent[] = [
 function Harness({ onChange, saved = ["gen-1", "gen-2"], start = initial }: { onChange?: (a: Agent[]) => void; saved?: string[]; start?: Agent[] }) {
   const [agents, setAgents] = useState<Agent[]>(start);
   return (
-    <EnvironmentAgents
-      path="/p"
-      envId="test"
-      agents={agents}
-      saved={saved}
-      onChange={(a) => {
-        setAgents(a);
-        onChange?.(a);
-      }}
-    />
+    <>
+      <button type="button" onClick={() => setAgents(start.map((a) => ({ ...a })))}>
+        replace-outside
+      </button>
+      <EnvironmentAgents
+        path="/p"
+        envId="test"
+        agents={agents}
+        saved={saved}
+        onChange={(a) => {
+          setAgents(a);
+          onChange?.(a);
+        }}
+      />
+    </>
   );
 }
 
@@ -128,6 +133,18 @@ describe("EnvironmentAgents", () => {
     // Метка «сохранён» тоже не переезжает к другому агенту.
     await waitFor(() => expect(screen.getByLabelText("Токен агента gen-2")).toHaveValue(""));
     expect(screen.getAllByText("Токен сохранён в хранилище ОС")).toHaveLength(1);
+  });
+
+  it("gives every row a fresh state when the list is replaced from outside", async () => {
+    const three: Agent[] = [...initial, { id: "gen-3", url: "http://10.0.1.13:7420", weight: 1 }];
+    renderWithClient(<Harness start={three} saved={["gen-1", "gen-2", "gen-3"]} />);
+    await userEvent.type(screen.getByLabelText("Токен агента gen-2"), "s3cret");
+    await userEvent.click(screen.getByRole("button", { name: "Удалить агента gen-1" }));
+    await userEvent.click(screen.getByRole("button", { name: "replace-outside" }));
+    const fields = screen.getAllByLabelText(/Токен агента/);
+    expect(fields).toHaveLength(3);
+    for (const f of fields) expect(f).toHaveValue("");
+    expect(api.agentSetToken).not.toHaveBeenCalled();
   });
 
   it("does not move the token state when the id of the row is edited", async () => {
