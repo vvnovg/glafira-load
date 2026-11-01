@@ -32,7 +32,7 @@ const metadata = {
 };
 
 test("rustRows: обычные и build-зависимости от корня, без dev, без локальных крейтов", () => {
-  const rows = rustRows(metadata);
+  const rows = rustRows(metadata, ["glafira-load-testing"]);
   assert.deepEqual(
     rows.filter((r) => ["alpha", "beta", "gamma"].includes(r.name)).map((r) => `${r.name} ${r.version} ${r.license}`),
     ["alpha 1.0.0 MIT", "beta 2.0.0 MIT OR Apache-2.0", "gamma 0.1.0 see LICENSE.txt in the crate"],
@@ -44,7 +44,7 @@ test("rustRows: обычные и build-зависимости от корня, 
 test("rustRows: порядок по кодовым точкам, а не по локали («-» раньше «_», заглавные раньше строчных)", () => {
   // localeCompare дал бы alpha, beta, gamma, Inflector, serde_json, serde-untagged.
   assert.deepEqual(
-    rustRows(metadata).map((r) => r.name),
+    rustRows(metadata, ["glafira-load-testing"]).map((r) => r.name),
     ["Inflector", "alpha", "beta", "gamma", "serde-untagged", "serde_json"],
   );
 });
@@ -65,9 +65,11 @@ test("npmRows: группы по лицензии разворачиваются
 test("render: разделы, счётчики, C-библиотеки (если есть) и экранирование «|»", () => {
   const rust = [{ name: "a|b", version: "1.0.0", license: "MIT", url: "" }];
   const npm = [{ name: "react", version: "19.1.0", license: "MIT", url: "https://react.dev" }];
-  // В сборке C-библиотек, невидимых для cargo, нет — и раздела нет.
-  assert.deepEqual(C_LIBRARIES, []);
-  assert.doesNotMatch(render({ rust, npm }), /C libraries/);
+  // C-библиотеки, которые собирают крейты -sys движка (rdkafka): раздел есть по умолчанию.
+  assert.deepEqual(C_LIBRARIES.map((l) => l.name), ["librdkafka", "lz4", "OpenSSL", "zlib", "zstd"]);
+  for (const l of C_LIBRARIES) assert.ok(l.license && l.url.startsWith("https://") && l.note, l.name);
+  assert.match(render({ rust, npm }), /## C libraries compiled into the binary/);
+  assert.doesNotMatch(render({ rust, npm, cLibraries: [] }), /C libraries/);
   const lib = { name: "libx", license: "BSD-2-Clause", url: "https://x", note: "x-sys" };
   const withC = render({ rust, npm, cLibraries: [lib] });
   assert.match(withC, /## C libraries compiled into the binary/);
@@ -80,4 +82,23 @@ test("render: разделы, счётчики, C-библиотеки (если
   assert.match(md, /## npm packages in the frontend \(1\)/);
   assert.ok(md.includes("| react | 19.1.0 | MIT | https://react.dev |"));
   assert.ok(md.endsWith("\n"));
+});
+
+test("rustRows: зависимости всех поставляемых пакетов (приложение и CLI), а не только корня", () => {
+  const two = {
+    packages: [
+      ...metadata.packages,
+      pkg("cli", "glafira-load-cli", "0.3.0", { source: null, license: "Apache-2.0" }),
+      pkg("k", "rdkafka", "0.37.0"),
+    ],
+    resolve: {
+      root: null,
+      nodes: [...metadata.resolve.nodes, { id: "cli", deps: [{ pkg: "k", dep_kinds: [{ kind: null }] }, { pkg: "a", dep_kinds: [{ kind: null }] }] }, { id: "k", deps: [] }],
+    },
+    workspace_members: ["app", "cli"],
+  };
+  const names = rustRows(two).map((r) => r.name);
+  assert.ok(names.includes("rdkafka") && names.includes("alpha"), names.join(","));
+  assert.equal(names.filter((n) => n === "alpha").length, 1);
+  assert.throws(() => rustRows(two, ["nope"]), /nope/);
 });

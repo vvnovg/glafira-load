@@ -36,5 +36,5 @@ eventsource-stream = "0.2"
 [dev-dependencies]
 axum = { version = "0.8", features = ["multipart"] }
 tempfile = "3"
-testcontainers = "0.23"
+testcontainers = "0.28"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "sync", "test-util", "net"] }

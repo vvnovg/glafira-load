@@ -1,7 +1,9 @@
-# Лицензии зависимостей: `cargo deny --manifest-path src-tauri/Cargo.toml --config deny.toml check licenses`
-# (так же в CI). Белый список — только разрешительные лицензии; MPL-2.0 — копилефт на уровне файла,
-# совместима, пока файлы этих крейтов не изменяются. TLS — rustls с провайдером ring (C и ассемблер ring
-# собираются из исходников крейта и покрыты его лицензией).
+# Лицензии зависимостей: `cargo deny --workspace --config deny.toml check licenses` из корня (так же в CI): корни
+# графа — все крейты workspace, включая glafira-load-engine и glafira-load-cli, с их dev-зависимостями.
+# Белый список — только разрешительные лицензии; MPL-2.0 — копилефт на уровне файла, совместима, пока файлы этих
+# крейтов не изменяются. TLS — rustls с провайдером ring (C и ассемблер ring
+# собираются из исходников крейта и покрыты его лицензией). C-библиотеки rdkafka-sys (librdkafka, OpenSSL, zlib, zstd)
+# cargo-deny не видит — они перечислены в THIRD_PARTY.md (scripts/third-party.mjs, C_LIBRARIES).
 [licenses]
 confidence-threshold = 0.8
 unused-allowed-license = "allow"
@@ -27,7 +29,7 @@ allow = [
 [licenses.private]
 ignore = true
 
-# Advisories (RustSec): `cargo deny --manifest-path <крейт>/Cargo.toml --config deny.toml check advisories`.
+# Advisories (RustSec): `cargo deny --workspace --config deny.toml check advisories`.
 # Исключения — только транзитивные unmaintained-крейты, от которых не уйти без мажорного обновления Tauri
 # или его плагинов; при переходе на Tauri 3 / gtk4 / zbus 6 в плагинах список пересмотреть. Уязвимости
 # (vulnerability) не игнорируем — чиним точечным `cargo update -p <крейт>`.

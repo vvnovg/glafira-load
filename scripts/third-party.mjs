@@ -1,30 +1,44 @@
 #!/usr/bin/env node
 // THIRD_PARTY.md — лицензии стороннего кода в сборке: крейты Rust (cargo metadata, без dev-зависимостей),
-// пакеты npm, попадающие во фронтенд (pnpm licenses --prod), и C-библиотеки, которых cargo не видит (если есть).
+// пакеты npm, попадающие во фронтенд (pnpm licenses --prod), и C-библиотеки, которых cargo не видит.
+// Крейты — от всех поставляемых пакетов workspace: приложения и CLI `glafira-load`.
 // Запуск из корня репозитория: `node scripts/third-party.mjs`.
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 /**
- * C-библиотеки, которые собирают крейты `-sys` и которых не видит cargo. Здесь их нет: TLS — rustls с ring,
- * а лицензия ring (её C и ассемблер) есть в метаданных крейта. Появится такая зависимость — добавить сюда.
+ * C-библиотеки, которые собирают крейты `-sys` и которых не видит cargo: librdkafka с её встроенным lz4
+ * (rdkafka-sys, cmake-build), OpenSSL 3 (openssl-src, feature ssl-vendored), zlib (libz-sys, libz-static)
+ * и zstd (zstd-sys). TLS приложения и контроллера — rustls с ring; лицензия ring есть в метаданных крейта.
  */
-export const C_LIBRARIES = [];
+export const C_LIBRARIES = [
+  { name: "librdkafka", license: "BSD-2-Clause", url: "https://github.com/confluentinc/librdkafka", note: "rdkafka-sys (cmake-build)" },
+  { name: "lz4", license: "BSD-2-Clause", url: "https://github.com/lz4/lz4", note: "bundled in librdkafka (src/lz4*)" },
+  { name: "OpenSSL", license: "Apache-2.0", url: "https://github.com/openssl/openssl", note: "openssl-src (rdkafka ssl-vendored)" },
+  { name: "zlib", license: "Zlib", url: "https://zlib.net", note: "libz-sys (rdkafka libz-static)" },
+  { name: "zstd", license: "BSD-3-Clause", url: "https://github.com/facebook/zstd", note: "zstd-sys (rdkafka zstd)" },
+];
+
+/** Пакеты workspace, которые поставляются пользователям: приложение и CLI. Их зависимости и попадают в список. */
+export const SHIPPED_PACKAGES = ["glafira-load-testing", "glafira-load-cli"];
 
 // Сравнение по кодовым точкам, а не localeCompare: порядок не зависит от локали и версии ICU.
 const cmp = (x, y) => (x < y ? -1 : x > y ? 1 : 0);
 const byNameVersion = (a, b) => cmp(a.name, b.name) || cmp(a.version, b.version);
 
 /**
- * Крейты, которые попадают в сборку: обход графа `resolve` от корня по обычным и build-зависимостям
- * (dev-зависимости не входят в бинарь). Локальные крейты (без `source`) пропускаются.
+ * Крейты, которые попадают в сборку: обход графа `resolve` от каждого поставляемого пакета по обычным и
+ * build-зависимостям (dev-зависимости не входят в бинарь). Локальные крейты (без `source`) пропускаются.
  */
-export function rustRows(metadata) {
+export function rustRows(metadata, shipped = SHIPPED_PACKAGES) {
   const nodes = new Map(metadata.resolve.nodes.map((n) => [n.id, n]));
   const packages = new Map(metadata.packages.map((p) => [p.id, p]));
+  const roots = metadata.packages.filter((p) => p.source === null && shipped.includes(p.name)).map((p) => p.id);
+  const missing = shipped.filter((n) => !metadata.packages.some((p) => p.source === null && p.name === n));
+  if (missing.length) throw new Error(`в cargo metadata нет пакетов: ${missing.join(", ")}`);
   const seen = new Set();
-  const queue = [metadata.resolve.root];
+  const queue = [...roots];
   while (queue.length) {
     const id = queue.shift();
     if (seen.has(id)) continue;
@@ -91,7 +105,8 @@ export function render({ rust, npm, cLibraries = C_LIBRARIES }) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const run = (cmd, args) => JSON.parse(execFileSync(cmd, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }));
-  const metadata = run("cargo", ["metadata", "--manifest-path", "src-tauri/Cargo.toml", "--format-version", "1", "--locked"]);
+  // Корень workspace: граф общий для всех крейтов, `resolve.root` там null — корни берёт `rustRows`.
+  const metadata = run("cargo", ["metadata", "--manifest-path", "Cargo.toml", "--format-version", "1", "--locked"]);
   const npm = run("pnpm", ["licenses", "list", "--prod", "--json"]);
   const rust = rustRows(metadata);
   const npmList = npmRows(npm);
