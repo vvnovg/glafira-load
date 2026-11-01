@@ -26,6 +26,34 @@ function LazyProfile({ path }: { path: string }) {
   );
 }
 
+// Вкладка сьюта — отдельный чанк, как профиль.
+const SuitePanel = lazy(() => import("./suites/SuitePanel").then((m) => ({ default: m.SuitePanel })));
+
+function LazySuite({ path, name }: { path: string; name: string }) {
+  const { t } = useTranslation();
+  return (
+    <ChunkBoundary fallback={<p className="empty">{t("common.chunkFailed")}</p>}>
+      <Suspense fallback={<p className="empty">{t("common.loading")}</p>}>
+        <SuitePanel path={path} name={name} />
+      </Suspense>
+    </ChunkBoundary>
+  );
+}
+
+// Вкладка прогона тянет uPlot — отдельный чанк.
+const RunPanel = lazy(() => import("./run/RunPanel").then((m) => ({ default: m.RunPanel })));
+
+function LazyRun({ path }: { path: string }) {
+  const { t } = useTranslation();
+  return (
+    <ChunkBoundary fallback={<p className="empty">{t("common.chunkFailed")}</p>}>
+      <Suspense fallback={<p className="empty">{t("common.loading")}</p>}>
+        <RunPanel path={path} />
+      </Suspense>
+    </ChunkBoundary>
+  );
+}
+
 function LazyHelp({ tab }: { tab: Extract<Tab, { kind: "help" }> }) {
   const { t } = useTranslation();
   return (
@@ -55,5 +83,9 @@ export function TabContent({ tab }: { tab: Tab }) {
       return <ProdLoadPanel path={tab.path} />;
     case "profile":
       return <LazyProfile path={tab.path} />;
+    case "suite":
+      return <LazySuite path={tab.path} name={tab.name} />;
+    case "run":
+      return <LazyRun path={tab.path} />;
   }
 }

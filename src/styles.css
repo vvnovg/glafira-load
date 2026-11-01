@@ -209,3 +209,12 @@ button.danger { color: #dc2626; }
 fieldset.plain { margin: 0; padding: 0; border: none; min-width: 0; }
 .form > fieldset.plain { grid-column: 1 / -1; }
 .stale { opacity: 0.6; }
+
+/* L2: агенты стенда, сьюты, прогон */
+.state-badge { display: inline-block; padding: 0 6px; border-radius: 8px; font-size: 11px; line-height: 16px; color: #fff; white-space: nowrap; }
+.state-ok { background: #16a34a; }
+.state-warn { background: #f59e0b; }
+.state-err { background: #dc2626; }
+.agents table { width: 100%; }
+.agents td > input { width: 100%; }
+.agent-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }

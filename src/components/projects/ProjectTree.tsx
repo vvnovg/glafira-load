@@ -28,13 +28,15 @@ function writeCollapsed(ids: Set<string>) {
   }
 }
 
-/** Узел проекта: имя, разделы и сервисы (сервисы берутся из манифеста при раскрытии). */
+/** Узел проекта: имя, разделы, сервисы и сьюты (берутся при раскрытии из манифеста и `suite_list`). */
 function ProjectNode({ project, collapsed, onToggle }: { project: RecentProject; collapsed: boolean; onToggle: () => void }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const open = useWorkspace((s) => s.open);
   const closeForProject = useWorkspace((s) => s.closeForProject);
-  const manifest = useQuery({ queryKey: ["project", project.path], queryFn: () => api.projectView(project.path), enabled: !collapsed && !project.missing });
+  const expanded = !collapsed && !project.missing;
+  const manifest = useQuery({ queryKey: ["project", project.path], queryFn: () => api.projectView(project.path), enabled: expanded });
+  const suites = useQuery({ queryKey: ["suites", project.path], queryFn: () => api.suiteList(project.path), enabled: expanded });
   const remove = useMutation({
     mutationFn: () => api.projectClose(project.path),
     onSuccess: () => {
@@ -65,7 +67,7 @@ function ProjectNode({ project, collapsed, onToggle }: { project: RecentProject;
           ×
         </button>
       </div>
-      {!collapsed && !project.missing && (
+      {expanded && (
         <ul role="group" className="tree">
           {section({ kind: "project", path: project.path }, t("sidebar.project"))}
           <li role="treeitem" aria-label={t("sidebar.services")}>
@@ -83,9 +85,26 @@ function ProjectNode({ project, collapsed, onToggle }: { project: RecentProject;
           {section({ kind: "registry", path: project.path }, t("sidebar.registry"))}
           {section({ kind: "prod-load", path: project.path }, t("sidebar.prodLoad"))}
           {section({ kind: "profile", path: project.path }, t("sidebar.profile"))}
+          <li role="treeitem" aria-label={t("sidebar.suites")}>
+            <div className="tree-conn">
+              <span className="muted">{t("sidebar.suites")}</span>
+            </div>
+            <ul role="group" className="tree">
+              {(suites.data ?? []).map((s) => (
+                <li role="treeitem" key={s.name}>
+                  <button type="button" className="link tree-name" title={s.file} onClick={() => open({ kind: "suite", path: project.path, name: s.name })}>
+                    {s.name}
+                  </button>
+                </li>
+              ))}
+              {suites.data?.length === 0 && <li className="tree-notice">{t("sidebar.noSuites")}</li>}
+            </ul>
+          </li>
+          {section({ kind: "run", path: project.path }, t("sidebar.run"))}
         </ul>
       )}
       {manifest.error && <ErrorBanner error={manifest.error} />}
+      {suites.error && <ErrorBanner error={suites.error} onRetry={() => suites.refetch()} />}
       {remove.error && <ErrorBanner error={remove.error} />}
     </li>
   );

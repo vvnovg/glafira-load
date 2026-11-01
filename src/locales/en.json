@@ -173,7 +173,9 @@
     "project": {
       "folder": "An empty folder inside your git repository: the project is a set of text files that you commit.",
       "services": "A service is a local git clone of the system under test; its contracts are found automatically or listed on the service tab.",
-      "environments": "Addresses of your stands without passwords; secrets come with the runner in stage L2."
+      "environments": "Addresses of your stands without passwords. Suite secrets live on the agents as environment variables, agent tokens in the OS keychain.",
+      "schemaRegistry": "Schema Registry of the stand: steps with <code>encoding: avro</code> need it; the agent fetches schema ids from it.",
+      "agents": "Load machines running <code>glafira-load agent</code> at the URL. Weight sets the agent's share of load. Tokens live in the OS keychain, not in the manifest."
     },
     "service": {
       "contracts": "OpenAPI/Swagger, Protobuf, AsyncAPI, Avro and JSON Schema, Flyway/Liquibase migrations, Spring controllers. Each file is parsed on its own: an error in one does not stop the rest.",
@@ -206,7 +208,11 @@
     "profile": "Load profile",
     "environments": "Environments",
     "project": "Project",
-    "folderToggle": "Expand or collapse {{name}}"
+    "folderToggle": "Expand or collapse {{name}}",
+    "suites": "Suites",
+    "noSuites": "no suites yet: create one from the registry",
+    "run": "Run",
+    "createSuite": "Create suite"
   },
   "tabs": {
     "settings": "Settings",
@@ -217,7 +223,9 @@
     "service": "{{name}} · {{service}}",
     "registry": "{{name}} · Registry",
     "prodLoad": "{{name}} · Production load",
-    "profile": "{{name}} · Load profile"
+    "profile": "{{name}} · Load profile",
+    "suite": "{{name}} · {{suite}}",
+    "run": "{{name}} · Run"
   },
   "layout": {
     "closeTab": "Close tab",
@@ -247,7 +255,8 @@
       "http": "HTTP base URL",
       "kafka": "Kafka bootstrap",
       "grpc": "gRPC address",
-      "sql": "DB connection (no password)"
+      "sql": "DB connection (no password)",
+      "schema_registry": "Schema Registry URL"
     },
     "addEnvironment": "Add environment",
     "revert": "Revert",
@@ -258,7 +267,11 @@
       "duplicate_service_id": "Duplicate service ID “{{id}}”",
       "empty_service_path": "Service “{{id}}” has no folder",
       "bad_environment_id": "Bad environment ID “{{id}}”",
-      "duplicate_environment_id": "Duplicate environment ID “{{id}}”"
+      "duplicate_environment_id": "Duplicate environment ID “{{id}}”",
+      "bad_agent_id": "Bad agent ID “{{id}}” in environment {{env}} (a–z, 0–9, hyphen)",
+      "duplicate_agent_id": "Duplicate agent ID “{{id}}” in environment {{env}}",
+      "bad_agent_url": "Agent “{{id}}” of environment {{env}} needs an http:// or https:// URL",
+      "bad_agent_weight": "Agent “{{id}}” of environment {{env}}: weight must be a whole number of 1 or more"
     },
     "fixToSave": "Fix the manifest to save:"
   },
@@ -495,6 +508,43 @@
     "uncovered": "Not covered by production figures: {{count}}",
     "chartMinutes": "minutes",
     "saveToCompute": "The profile is not saved yet: save to compute its targets"
+  },
+  "agents": {
+    "title": "Agents",
+    "id": "Agent ID",
+    "url": "Agent URL",
+    "weight": "Weight",
+    "status": "Status",
+    "token": "Token of agent {{id}}",
+    "tokenPlaceholder": "paste the agent token",
+    "saveToken": "Save token",
+    "removeToken": "Remove token",
+    "tokenSaved": "Token saved to the OS keychain",
+    "tokenRemoved": "Token removed from the OS keychain",
+    "tokenSet": "token set",
+    "tokenMissing": "token not set",
+    "saveFirst": "save the manifest to set the token",
+    "add": "Add agent",
+    "remove": "Remove agent {{id}}",
+    "probe": "Check",
+    "probeSavedOnly": "Checks the agents of the saved manifest",
+    "empty": "No agents: a run on this environment needs at least one",
+    "info_one": "{{version}} · {{os}}/{{arch}} · {{count}} CPU",
+    "info_other": "{{version}} · {{os}}/{{arch}} · {{count}} CPUs",
+    "busyRun": "run {{run}}",
+    "state": {
+      "ready": "ready",
+      "busy": "busy",
+      "unreachable": "unreachable",
+      "version": "version mismatch",
+      "no_token": "no token"
+    }
+  },
+  "suite": {
+    "title": "Suite {{name}}"
+  },
+  "run": {
+    "title": "Run"
   },
   "units": {
     "rps": "RPS",

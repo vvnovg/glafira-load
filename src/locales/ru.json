@@ -173,7 +173,9 @@
     "project": {
       "folder": "Пустая папка внутри вашего git-репозитория: проект — набор текстовых файлов, которые вы коммитите.",
       "services": "Сервис — локальный клон git тестируемой системы; контракты находятся автоматически или перечисляются на вкладке сервиса.",
-      "environments": "Адреса стендов без паролей; секреты появятся вместе с раннером на этапе L2."
+      "environments": "Адреса стендов без паролей. Секреты сьюта лежат на агентах в переменных окружения, токены агентов — в хранилище ОС.",
+      "schemaRegistry": "Schema Registry стенда: нужен шагам с <code>encoding: avro</code>; id схем агент берёт оттуда.",
+      "agents": "Машины нагрузки с <code>glafira-load agent</code> по адресу. Вес задаёт долю нагрузки агента. Токены лежат в хранилище ОС, а не в манифесте."
     },
     "service": {
       "contracts": "OpenAPI/Swagger, Protobuf, AsyncAPI, Avro и JSON Schema, миграции Flyway/Liquibase, контроллеры Spring. Каждый файл разбирается отдельно: ошибка в одном не останавливает остальные.",
@@ -206,7 +208,11 @@
     "profile": "Профиль нагрузки",
     "environments": "Стенды",
     "project": "Проект",
-    "folderToggle": "Развернуть или свернуть {{name}}"
+    "folderToggle": "Развернуть или свернуть {{name}}",
+    "suites": "Сьюты",
+    "noSuites": "сьютов пока нет: создайте из реестра",
+    "run": "Прогон",
+    "createSuite": "Создать сьют"
   },
   "tabs": {
     "settings": "Настройки",
@@ -217,7 +223,9 @@
     "service": "{{name}} · {{service}}",
     "registry": "{{name}} · Реестр",
     "prodLoad": "{{name}} · Нагрузка ПРОМ",
-    "profile": "{{name}} · Профиль"
+    "profile": "{{name}} · Профиль",
+    "suite": "{{name}} · {{suite}}",
+    "run": "{{name}} · Прогон"
   },
   "layout": {
     "closeTab": "Закрыть вкладку",
@@ -247,7 +255,8 @@
       "http": "Базовый адрес HTTP",
       "kafka": "Bootstrap Kafka",
       "grpc": "Адрес gRPC",
-      "sql": "Строка БД (без пароля)"
+      "sql": "Строка БД (без пароля)",
+      "schema_registry": "Адрес Schema Registry"
     },
     "addEnvironment": "Добавить стенд",
     "revert": "Отменить правки",
@@ -258,7 +267,11 @@
       "duplicate_service_id": "Повтор ID сервиса «{{id}}»",
       "empty_service_path": "У сервиса «{{id}}» нет папки",
       "bad_environment_id": "Плохой ID стенда «{{id}}»",
-      "duplicate_environment_id": "Повтор ID стенда «{{id}}»"
+      "duplicate_environment_id": "Повтор ID стенда «{{id}}»",
+      "bad_agent_id": "Плохой ID агента «{{id}}» стенда {{env}} (a–z, 0–9, дефис)",
+      "duplicate_agent_id": "Повтор ID агента «{{id}}» стенда {{env}}",
+      "bad_agent_url": "У агента «{{id}}» стенда {{env}} нужен адрес http:// или https://",
+      "bad_agent_weight": "Вес агента «{{id}}» стенда {{env}} — целое число от 1"
     },
     "fixToSave": "Исправьте манифест, чтобы сохранить:"
   },
@@ -499,6 +512,45 @@
     "uncovered": "Не покрыто цифрами ПРОМ: {{count}}",
     "chartMinutes": "минуты",
     "saveToCompute": "Профиль ещё не сохранён: сохраните, чтобы посчитать цели"
+  },
+  "agents": {
+    "title": "Агенты",
+    "id": "ID агента",
+    "url": "Адрес агента",
+    "weight": "Вес",
+    "status": "Состояние",
+    "token": "Токен агента {{id}}",
+    "tokenPlaceholder": "вставьте токен агента",
+    "saveToken": "Сохранить токен",
+    "removeToken": "Удалить токен",
+    "tokenSaved": "Токен сохранён в хранилище ОС",
+    "tokenRemoved": "Токен удалён из хранилища ОС",
+    "tokenSet": "токен задан",
+    "tokenMissing": "токен не задан",
+    "saveFirst": "сохраните манифест, чтобы задать токен",
+    "add": "Добавить агента",
+    "remove": "Удалить агента {{id}}",
+    "probe": "Проверить",
+    "probeSavedOnly": "Проверяются агенты сохранённого манифеста",
+    "empty": "Агентов нет: для прогона на этом стенде нужен хотя бы один",
+    "info_one": "{{version}} · {{os}}/{{arch}} · {{count}} ядро",
+    "info_few": "{{version}} · {{os}}/{{arch}} · {{count}} ядра",
+    "info_many": "{{version}} · {{os}}/{{arch}} · {{count}} ядер",
+    "info_other": "{{version}} · {{os}}/{{arch}} · {{count}} ядра",
+    "busyRun": "прогон {{run}}",
+    "state": {
+      "ready": "готов",
+      "busy": "занят",
+      "unreachable": "недоступен",
+      "version": "другая версия",
+      "no_token": "нет токена"
+    }
+  },
+  "suite": {
+    "title": "Сьют {{name}}"
+  },
+  "run": {
+    "title": "Прогон"
   },
   "units": {
     "rps": "RPS",

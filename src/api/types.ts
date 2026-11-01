@@ -13,7 +13,14 @@ export type ErrorCode =
   | "TEMPLATE_MISMATCH"
   | "TEMPLATE_INVALID"
   | "PATH_OUTSIDE_PROJECT"
-  | "SCAN_BUSY";
+  | "SCAN_BUSY"
+  | "SUITE_INVALID"
+  | "AGENT_UNREACHABLE"
+  | "AGENT_BUSY"
+  | "AGENT_VERSION"
+  | "SECRET_MISSING"
+  | "TOKEN_MISSING"
+  | "RUN_BUSY";
 
 /** Текст из Rust: ключ словаря, параметры и английский текст (запасной вариант). */
 export interface LocalizedText {
@@ -86,12 +93,27 @@ export interface Service {
   kafka?: { topics: Record<string, TopicSchema> };
 }
 export type EnvKind = "dev" | "test" | "stage" | "prod";
-export interface Environment { id: string; kind: EnvKind; http?: string; kafka?: string; grpc?: string; sql?: string }
+/** Агент нагрузки стенда (спека L2 §4.2); `weight` ≥ 1, serde всегда пишет его в ответ (по умолчанию 1). Токен — в хранилище ОС, не здесь. */
+export interface Agent { id: string; url: string; weight: number }
+export interface Environment {
+  id: string;
+  kind: EnvKind;
+  http?: string;
+  kafka?: string;
+  grpc?: string;
+  sql?: string;
+  /** Schema Registry стенда для `encoding: avro`. */
+  schema_registry?: string;
+  /** Пустой список serde не пишет — поля может не быть. */
+  agents?: Agent[];
+}
 export interface Manifest { format: number; name: string; services: Service[]; environments: Environment[] }
 export type ManifestProblem =
   | { kind: "bad_format"; format: number }
   | { kind: "empty_name" }
-  | { kind: "bad_service_id" | "duplicate_service_id" | "empty_service_path" | "bad_environment_id" | "duplicate_environment_id"; id: string };
+  | { kind: "bad_service_id" | "duplicate_service_id" | "empty_service_path" | "bad_environment_id" | "duplicate_environment_id"; id: string }
+  /** Проблемы агентов несут и стенд: одинаковый ID агента допустим в разных стендах. */
+  | { kind: "bad_agent_id" | "duplicate_agent_id" | "bad_agent_url" | "bad_agent_weight"; env: string; id: string };
 
 export interface SchemaSummary {
   name: string;
@@ -185,6 +207,130 @@ export interface Target { id: string; service: string; kind: OpKind; basis_value
 export interface Point { minute: number; pct: number }
 export interface Computed { profile: string; basis: Basis; targets: Target[]; total: number; uncovered: string[]; timeline: Point[]; total_minutes: number }
 
+// ---- Сьют (L2): snake_case, как `glafira-load-model::suite`; поля с `skip_serializing_if` — необязательные ----
+
+export type DataMode = "slice" | "shared";
+export interface DataSet { path: string; mode: DataMode }
+export type Arrival = "poisson" | "constant";
+export interface HttpDefaults { timeout_ms: number; headers: Record<string, string> }
+export interface Defaults { http: HttpDefaults; kafka: Record<string, string>; arrival: Arrival; max_in_flight: number }
+export type OnFail = "stop" | "continue";
+/** Число, список чисел или класс `2xx`. */
+export type StatusExpect = number | number[] | string;
+export type Matcher = "exists" | { equals: unknown } | { matches: string } | { gt: number } | { lt: number };
+/** Пустые проверки serde не пишет: у шага без `expect` поля нет вовсе. */
+export interface Expect { status?: StatusExpect; jsonpath?: Record<string, Matcher>; schema?: "response"; max_ms?: number }
+export interface HttpStep {
+  operation: string;
+  path?: Record<string, string>;
+  query?: Record<string, string>;
+  headers?: Record<string, string>;
+  body?: unknown;
+  body_text?: string;
+  timeout_ms?: number;
+}
+export type Encoding = "json" | "avro";
+export interface ProduceStep { operation: string; key?: string; value?: unknown; value_text?: string; headers?: Record<string, string>; encoding: Encoding }
+export interface Match { key?: string; jsonpath?: Record<string, string> }
+export interface ConsumeStep { operation: string; match?: Match; timeout_ms: number }
+/** Ключ шага — вариант `Action` (serde `flatten` + `rename_all = "snake_case"`). */
+export type StepAction = { http: HttpStep } | { kafka_produce: ProduceStep } | { kafka_consume: ConsumeStep };
+/** `id` по умолчанию — `step<N>` (1-based), его вычисляет потребитель. */
+export type Step = StepAction & { id?: string; expect?: Expect; extract?: Record<string, string> };
+export interface Scenario { id: string; drives?: string; on_fail: OnFail; steps: Step[] }
+export interface Suite { format: number; name: string; secrets?: string[]; data?: Record<string, DataSet>; defaults: Defaults; scenarios: Scenario[] }
+export type Level = "error" | "warning";
+export interface Finding { level: Level; file: string; line: number | null; message: string }
+export interface CoverageRow { id: string; kind: OpKind; target: number; planned: number; delta: number }
+export interface Coverage { rows: CoverageRow[]; uncovered: string[] }
+
+// ---- Протокол агента (L2): `glafira-load-engine::agent_api`, serde camelCase ----
+
+export type Mode = "run" | "smoke";
+export type RunStatus = "completed" | "stopped" | "incomplete" | "failed";
+/** `busy` — `run_id` идущего прогона или null. */
+export interface AgentInfo { version: string; os: string; arch: string; cpus: number; busy: string | null }
+export interface OpTick {
+  id: string;
+  n: number;
+  err: Record<string, number>;
+  dropped: number;
+  p50: number;
+  p90: number;
+  p95: number;
+  p99: number;
+  max: number;
+  bytesIn: number;
+  bytesOut: number;
+  lag: number | null;
+  /** Гистограмма секунды (для слияния перцентилей контроллером); в событиях окна обычно нет. */
+  hist?: string;
+}
+export interface ScenarioTick { id: string; n: number; err: Record<string, number>; dropped: number; p50: number; p95: number; p99: number; max: number; hist?: string }
+export interface Tick { t: number; ops: OpTick[]; scenarios: ScenarioTick[] }
+export interface PhaseEvent { t: number; index: number; pct: number }
+export interface ErrorSample {
+  t: number;
+  code: string;
+  operation: string;
+  scenario: string;
+  step: string;
+  agent: string;
+  message: string;
+  request: string | null;
+  response: string | null;
+}
+export interface OpSummary {
+  id: string;
+  n: number;
+  rpsAvg: number;
+  rpsPeak: number;
+  err: Record<string, number>;
+  errPct: number;
+  dropped: number;
+  p50: number;
+  p90: number;
+  p95: number;
+  p99: number;
+  max: number;
+  target: number | null;
+  achievedPct: number | null;
+}
+export interface ScenarioSummary { id: string; n: number; err: Record<string, number>; p50: number; p95: number; p99: number; max: number }
+export interface AgentSummary { status: RunStatus; ops: OpSummary[]; scenarios: ScenarioSummary[]; seconds: number }
+
+// ---- Файлы прогона и контроллер: snake_case, как `run.yaml`; пустые поля serde опускает ----
+
+/** `url` есть только у агентов стенда (у встроенного `local` его нет), `version` — после опроса. */
+export interface RunAgent { id: string; url?: string; weight: number; version?: string }
+export interface RunMeta {
+  run_id: string;
+  suite: string;
+  profile: string;
+  env: string;
+  mode: Mode;
+  agents: RunAgent[];
+  project_commit?: string;
+  /** Сервис → версия из реестра. */
+  services?: Record<string, string>;
+  /** RFC 3339, UTC. */
+  started_at: string;
+  /** Нет у идущего или недостроенного прогона. */
+  ended_at?: string;
+  status?: RunStatus;
+}
+export type AgentRunState = "ready" | "running" | "lost" | "done" | "failed";
+/** `dir` — абсолютный путь папки прогона. */
+export interface RunResult { run_id: string; dir: string; status: RunStatus; summary: AgentSummary }
+/** События `Channel` команды `run_start` (`#[serde(tag = "type", rename_all = "snake_case")]`, newtype-варианты сплющены). */
+export type ControllerEvent =
+  | { type: "started"; run_id: string; dir: string }
+  | ({ type: "tick" } & Tick)
+  | ({ type: "phase" } & PhaseEvent)
+  | { type: "agent"; id: string; state: AgentRunState }
+  | ({ type: "error" } & ErrorSample)
+  | ({ type: "done" } & RunResult);
+
 // ---- DTO приложения: camelCase ----
 
 export interface Project { path: string; manifest: Manifest; problems: ManifestProblem[]; readOnly: boolean; missingServices: string[] }
@@ -220,3 +366,22 @@ export interface TemplateLabels {
   params: string[];
   helpLines: string[];
 }
+
+// ---- DTO приложения L2: camelCase ----
+
+/** `file` — `suites/<имя>/suite.yaml` относительно проекта; `scenarios = 0` — сьют не разобран. */
+export interface SuiteMeta { name: string; file: string; scenarios: number }
+/** `lines`: `"scenarios[0]"`, `"scenarios[0].steps[1]"` → строка YAML (1-based); пусто, если не разобран. */
+export interface SuiteView { name: string; file: string; text: string; suite: Suite | null; findings: Finding[]; lines: Record<string, number> }
+/** `coverage` — только если сьют разобран и профиль посчитан; `profile = ""` — профилей нет. */
+export interface CheckReport { findings: Finding[]; coverage: Coverage | null; profile: string }
+export type AgentProbeState = "ready" | "busy" | "unreachable" | "version" | "no_token";
+/** `info` есть у `ready` и `busy`; `message`: busy — run_id, version — обе версии, unreachable — причина (технический текст). */
+export interface AgentStatus { id: string; url: string; state: AgentProbeState; info: AgentInfo | null; message: string | null }
+export interface SmokeStep { id: string; operation: string; ok: boolean; code?: string; message?: string }
+export interface SmokeScenario { id: string; steps: SmokeStep[] }
+export interface SmokeReport { scenarios: SmokeScenario[] }
+/** Строка `run_list`: `RunMeta` плюс `dir` — `runs/<папка>` относительно проекта (`#[serde(flatten)]`). */
+export type RunListEntry = RunMeta & { dir: string };
+/** `dir` — `runs/<папка>` относительно проекта. */
+export interface RunDetails { dir: string; meta: RunMeta; summary: AgentSummary | null; smoke: SmokeReport | null }

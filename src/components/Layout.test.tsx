@@ -29,4 +29,15 @@ describe("Layout", () => {
     expect(screen.queryByRole("tab")).toBeNull();
     expect(baseName("C:\\work\\p\\")).toBe("p");
   });
+
+  it("titles the suite and run tabs and renders their panels", async () => {
+    renderWithClient(<Layout />);
+    act(() => useWorkspace.getState().open({ kind: "suite", path: "/home/u/orders-load", name: "orders" }));
+    // Вкладка сьюта — ленивый чанк: панель появляется после загрузки.
+    expect(await screen.findByRole("heading", { name: "Сьют orders" })).toBeInTheDocument();
+    act(() => useWorkspace.getState().open({ kind: "run", path: "/home/u/orders-load" }));
+    expect(await screen.findByRole("tab", { name: "orders-load · orders" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "orders-load · Прогон" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Прогон" })).toBeInTheDocument();
+  });
 });

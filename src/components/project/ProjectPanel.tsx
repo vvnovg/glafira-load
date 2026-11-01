@@ -11,6 +11,7 @@ import { useHelpChapter } from "../../state/helpContext";
 import { tabId, useWorkspace } from "../../state/workspace";
 import { ErrorBanner } from "../common/ErrorBanner";
 import { Hint } from "../common/Hint";
+import { EnvironmentAgents, validAgentUrl, validAgentWeight } from "./EnvironmentAgents";
 
 const ENV_KINDS: EnvKind[] = ["dev", "test", "stage", "prod"];
 /** Формат ID сервиса и стенда, как `is_id` в Rust. */
@@ -33,6 +34,17 @@ export function draftProblems(m: Manifest): ManifestProblem[] {
     if (envs.has(e.id)) out.push({ kind: "duplicate_environment_id", id: e.id });
     else if (!ID_RE.test(e.id)) out.push({ kind: "bad_environment_id", id: e.id });
     envs.add(e.id);
+  }
+  // Агенты — после всех стендов, как в `validate`: повтор, иначе плохой ID; адрес; вес.
+  for (const e of m.environments) {
+    const agentIds = new Set<string>();
+    for (const a of e.agents ?? []) {
+      if (agentIds.has(a.id)) out.push({ kind: "duplicate_agent_id", env: e.id, id: a.id });
+      else if (!ID_RE.test(a.id)) out.push({ kind: "bad_agent_id", env: e.id, id: a.id });
+      agentIds.add(a.id);
+      if (!validAgentUrl(a.url)) out.push({ kind: "bad_agent_url", env: e.id, id: a.id });
+      if (!validAgentWeight(a.weight)) out.push({ kind: "bad_agent_weight", env: e.id, id: a.id });
+    }
   }
   return out;
 }
@@ -63,6 +75,7 @@ function cloneManifest(m: Manifest): Manifest {
 }
 
 function problemText(t: (k: string, o?: Record<string, unknown>) => string, p: ManifestProblem): string {
+  if ("env" in p) return t(`project.problems.${p.kind}`, { id: p.id, env: p.env });
   return "id" in p ? t(`project.problems.${p.kind}`, { id: p.id }) : "format" in p ? t("project.problems.bad_format", { format: p.format }) : t("project.problems.empty_name");
 }
 
@@ -144,14 +157,41 @@ function ServiceRow({ s, project, onChange, onRemove, missing, invalid }: { s: S
   );
 }
 
-function EnvRow({ e, onChange, onRemove, invalid }: { e: Environment; onChange: (e: Environment) => void; onRemove: () => void; invalid: boolean }) {
+const ENV_FIELDS = ["http", "kafka", "grpc", "sql", "schema_registry"] as const;
+
+/** Стенд в форме: адреса, Schema Registry и агенты; `savedAgents` — ID агентов этого стенда в сохранённом манифесте. */
+function EnvRow({
+  e,
+  path,
+  savedAgents,
+  onChange,
+  onRemove,
+  invalid,
+}: {
+  e: Environment;
+  path: string;
+  savedAgents: string[];
+  onChange: (e: Environment) => void;
+  onRemove: () => void;
+  invalid: boolean;
+}) {
   const { t } = useTranslation();
-  const field = (key: "http" | "kafka" | "grpc" | "sql") => (
+  const input = (key: (typeof ENV_FIELDS)[number]) => (
     <label key={key}>
       {t(`project.env.${key}`)}
-      <input value={e[key] ?? ""} onChange={(ev) => onChange({ ...e, [key]: ev.target.value || undefined })} />
+      <input aria-label={t(`project.env.${key}`)} value={e[key] ?? ""} onChange={(ev) => onChange({ ...e, [key]: ev.target.value || undefined })} />
     </label>
   );
+  // Подсказка — рядом с полем, а не внутри <label>: клик по «?» не должен уводить фокус в поле.
+  const field = (key: (typeof ENV_FIELDS)[number]) =>
+    key === "schema_registry" ? (
+      <span key={key} className="row">
+        {input(key)}
+        <Hint k="hints.project.schemaRegistry" label={t("project.env.schema_registry")} />
+      </span>
+    ) : (
+      input(key)
+    );
   return (
     <fieldset className="panel">
       <div className="row">
@@ -177,7 +217,15 @@ function EnvRow({ e, onChange, onRemove, invalid }: { e: Environment; onChange: 
           ×
         </button>
       </div>
-      <div className="row">{(["http", "kafka", "grpc", "sql"] as const).map(field)}</div>
+      <div className="row">{ENV_FIELDS.map(field)}</div>
+      {/* Пустой список агентов в манифест не пишется (как serde `skip_serializing_if`). */}
+      <EnvironmentAgents
+        path={path}
+        envId={e.id}
+        agents={e.agents ?? []}
+        saved={savedAgents}
+        onChange={(agents) => onChange({ ...e, agents: agents.length > 0 ? agents : undefined })}
+      />
     </fieldset>
   );
 }
@@ -300,6 +348,8 @@ function ExistingProject({ path }: { path: string }) {
           <EnvRow
             key={i}
             e={e}
+            path={path}
+            savedAgents={(p.manifest.environments.find((x) => x.id === e.id)?.agents ?? []).map((a) => a.id)}
             invalid={badEnvs.has(i)}
             onChange={(next) => update({ environments: draft.environments.map((x, j) => (j === i ? next : x)) })}
             onRemove={() => update({ environments: draft.environments.filter((_, j) => j !== i) })}

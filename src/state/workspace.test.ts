@@ -10,6 +10,9 @@ describe("workspace tabs", () => {
     expect(tabId({ kind: "registry", path: "/p/a" })).toBe("registry:/p/a");
     expect(tabId({ kind: "prod-load", path: "/p/a" })).toBe("prod-load:/p/a");
     expect(tabId({ kind: "profile", path: "/p/a" })).toBe("profile:/p/a");
+    expect(tabId({ kind: "suite", path: "/p/a", name: "orders" })).toBe("suite:/p/a:orders");
+    expect(tabId({ kind: "run", path: "/p/a" })).toBe("run:/p/a");
+    expect(tabProject({ kind: "suite", path: "/p/a", name: "orders" })).toBe("/p/a");
     expect(tabId({ kind: "help" })).toBe("help");
   });
 

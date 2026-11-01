@@ -14,6 +14,7 @@ const api = vi.hoisted(() => ({
   projectOpen: vi.fn(async (path: string) => ({ path, manifest: { format: 1, name: "Orders platform", services: [{ id: "orders", name: "Orders", path: "../orders", contracts: [] }], environments: [] }, problems: [], readOnly: false, missingServices: [] })),
   projectView: vi.fn(async (path: string) => ({ path, manifest: { format: 1, name: "Orders platform", services: [{ id: "orders", name: "Orders", path: "../orders", contracts: [] }], environments: [] }, problems: [], readOnly: false, missingServices: [] })),
   projectClose: vi.fn(async () => undefined),
+  suiteList: vi.fn(async (_path: string) => [{ name: "orders-flow", file: "suites/orders-flow/suite.yaml", scenarios: 2 }]),
 }));
 vi.mock("../../api/client", () => ({ api, toAppError: (e: unknown) => e }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(async () => "/p/new") }));
@@ -42,6 +43,25 @@ describe("ProjectTree", () => {
     // Раскрытие узла только читает манифест: список недавних не переупорядочивается.
     expect(api.projectView).toHaveBeenCalledWith("/p/orders");
     expect(api.projectOpen).not.toHaveBeenCalled();
+  });
+
+  it("lists suites under the project and opens the suite and run tabs", async () => {
+    renderWithClient(<ProjectTree />);
+    await screen.findByRole("treeitem", { name: /Orders platform/ });
+    const suites = await screen.findByRole("treeitem", { name: "Сьюты" });
+    await userEvent.click(await within(suites).findByRole("button", { name: "orders-flow" }));
+    expect(api.suiteList).toHaveBeenCalledWith("/p/orders");
+    // Пропавший проект не раскрывается — его сьюты не запрашиваются.
+    expect(api.suiteList).toHaveBeenCalledTimes(1);
+    expect(useWorkspace.getState().activeId).toBe("suite:/p/orders:orders-flow");
+    await userEvent.click(screen.getByRole("button", { name: "Прогон" }));
+    expect(useWorkspace.getState().activeId).toBe("run:/p/orders");
+  });
+
+  it("says when the project has no suites yet", async () => {
+    api.suiteList.mockResolvedValueOnce([]);
+    renderWithClient(<ProjectTree />);
+    expect(await screen.findByText("сьютов пока нет: создайте из реестра")).toBeInTheDocument();
   });
 
   it("removes a missing project from the list and closes its tabs", async () => {

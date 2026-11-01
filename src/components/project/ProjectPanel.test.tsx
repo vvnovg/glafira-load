@@ -98,4 +98,34 @@ describe("ProjectPanel", () => {
     await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
     expect(await screen.findByText("У сервиса «orders» нет папки")).toBeInTheDocument();
   });
+  it("edits the schema registry and the agents of an environment and saves them", async () => {
+    renderWithClient(<ProjectPanel path="/p/orders" />);
+    await screen.findByLabelText("Имя проекта");
+    await userEvent.type(screen.getByLabelText("Адрес Schema Registry"), "https://sr.test.local");
+    await userEvent.click(screen.getByRole("button", { name: "Добавить агента" }));
+    expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
+    expect(screen.getByText("Плохой ID агента «» стенда test (a–z, 0–9, дефис)")).toBeInTheDocument();
+    expect(screen.getByText("У агента «» стенда test нужен адрес http:// или https://")).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("ID агента"), "gen-1");
+    await userEvent.type(screen.getByLabelText("Адрес агента"), "http://10.0.1.11:7420");
+    // Новый агент ещё не в сохранённом манифесте: токен задаётся после сохранения.
+    expect(screen.getByLabelText("Токен агента gen-1")).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+    expect(api.projectSave).toHaveBeenCalledWith(
+      "/p/orders",
+      expect.objectContaining({
+        environments: [expect.objectContaining({ id: "test", schema_registry: "https://sr.test.local", agents: [{ id: "gen-1", url: "http://10.0.1.11:7420", weight: 1 }] })],
+      }),
+    );
+    expect(await screen.findByLabelText("Токен агента gen-1")).toBeEnabled();
+  });
+
+  it("does not write an empty agent list into the manifest", async () => {
+    renderWithClient(<ProjectPanel path="/p/orders" />);
+    await screen.findByLabelText("Имя проекта");
+    await userEvent.click(screen.getByRole("button", { name: "Добавить агента" }));
+    await userEvent.click(screen.getByRole("button", { name: "Удалить агента" }));
+    // Черновик снова равен сохранённому манифесту — сохранять нечего.
+    expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
+  });
 });

@@ -1,12 +1,16 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
+  AgentStatus,
   AppError,
   AppInfo,
+  CheckReport,
   Computed,
   ContractRef,
+  ControllerEvent,
   LanguageSettings,
   Manifest,
   Manual,
+  Mode,
   Operation,
   OperationDraft,
   OperationRow,
@@ -17,9 +21,14 @@ import type {
   RecentProject,
   RegistryDiff,
   RegistryFilter,
+  RunDetails,
+  RunListEntry,
+  RunResult,
   ScanMeta,
   ScanProgress,
   ScanReport,
+  SuiteMeta,
+  SuiteView,
   Table,
   TemplateLabels,
   TemplatePreview,
@@ -85,4 +94,24 @@ export const api = {
   profileGet: (path: string) => call<ProfileFile>("profile_get", { path }),
   profileSave: (path: string, profile: ProfileFile) => call<ProfileFile>("profile_save", { path, profile }),
   profileCompute: (path: string, profileName: string) => call<Computed>("profile_compute", { path, profileName }),
+  suiteList: (path: string) => call<SuiteMeta[]>("suite_list", { path }),
+  suiteGet: (path: string, name: string) => call<SuiteView>("suite_get", { path, name }),
+  suiteCheck: (path: string, name: string) => call<CheckReport>("suite_check", { path, name }),
+  suiteCreate: (path: string, name: string, operationIds: string[]) => call<SuiteMeta>("suite_create", { path, name, operationIds }),
+  /** `token = null` (или пробелы) удаляет токен из хранилища ОС. */
+  agentSetToken: (path: string, envId: string, agentId: string, token: string | null) => call<void>("agent_set_token", { path, envId, agentId, token }),
+  /** Опрос агентов сохранённого манифеста; порядок — порядок агентов стенда. */
+  agentProbe: (path: string, envId: string) => call<AgentStatus[]>("agent_probe", { path, envId }),
+  /** Прогон: события идут в `onEvent`, промис завершается итогом или ошибкой запуска. */
+  runStart: (path: string, suite: string, profile: string, env: string, mode: Mode, maxInFlight: number | null, onEvent: (e: ControllerEvent) => void) => {
+    const channel = new Channel<ControllerEvent>();
+    channel.onmessage = onEvent;
+    return call<RunResult>("run_start", { path, suite, profile, env, mode, maxInFlight, onEvent: channel });
+  },
+  runStop: (path: string) => call<void>("run_stop", { path }),
+  runList: (path: string) => call<RunListEntry[]>("run_list", { path }),
+  /** `dir` — `runs/<папка>` из `RunListEntry.dir`. */
+  runGet: (path: string, dir: string) => call<RunDetails>("run_get", { path, dir }),
+  /** Ответ на событие `run-close-requested`: остановить прогоны и закрыть окно. */
+  confirmClose: () => call<void>("confirm_close"),
 };

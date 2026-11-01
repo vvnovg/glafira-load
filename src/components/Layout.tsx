@@ -26,6 +26,10 @@ function tabTitle(tab: Tab): string {
       return i18n.t("tabs.prodLoad", { name: baseName(tab.path) });
     case "profile":
       return i18n.t("tabs.profile", { name: baseName(tab.path) });
+    case "suite":
+      return i18n.t("tabs.suite", { name: baseName(tab.path), suite: tab.name });
+    case "run":
+      return i18n.t("tabs.run", { name: baseName(tab.path) });
   }
 }
 

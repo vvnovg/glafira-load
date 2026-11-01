@@ -7,6 +7,10 @@ export type TabSpec =
   | { kind: "registry"; path: string }
   | { kind: "prod-load"; path: string }
   | { kind: "profile"; path: string }
+  /** Сьют `suites/<name>/suite.yaml` проекта. */
+  | { kind: "suite"; path: string; name: string }
+  /** Прогон проекта: форма запуска, живые графики, прошлые прогоны. */
+  | { kind: "run"; path: string }
   | { kind: "about" }
   /** Справка: глава и раздел руководства (F1, ссылки). */
   | { kind: "help"; chapter?: string; anchor?: string }
@@ -20,9 +24,12 @@ export function tabId(spec: TabSpec): string {
       return `project:${spec.path ?? "new"}`;
     case "service":
       return `service:${spec.path}:${spec.serviceId}`;
+    case "suite":
+      return `suite:${spec.path}:${spec.name}`;
     case "registry":
     case "prod-load":
     case "profile":
+    case "run":
       return `${spec.kind}:${spec.path}`;
     default:
       return spec.kind;
