@@ -1,6 +1,8 @@
 //! Планировщик открытого цикла по RPS (спека L2 §5.1): задача на сценарий, интервалы
-//! Poisson или Constant, потолок `max_in_flight`, посекундные `tick`, смена фаз, остановка с
-//! доработкой активных итераций; режим `smoke` — каждый сценарий один раз последовательно.
+//! Poisson или Constant с пересчётом частоты каждую секунду, потолок `max_in_flight`,
+//! посекундные `tick` (и во время доработки), смена фаз, остановка с доработкой активных
+//! итераций в пределах `drain` и прерыванием оставшихся; режим `smoke` — каждый сценарий
+//! один раз последовательно.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
@@ -11,7 +13,7 @@ use glafira_load_model::suite::{Arrival, OnFail, Suite};
 use rand::Rng;
 use tokio::sync::Semaphore;
 use tokio::sync::mpsc::Sender;
-use tokio::time::{Instant, sleep_until};
+use tokio::time::{Instant, sleep_until, timeout};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
@@ -20,6 +22,13 @@ use crate::context::{IterationCtx, RunContext};
 use crate::errors::StepError;
 use crate::executor::StepExecutor;
 use crate::metrics::{Sample, SharedRecorder};
+
+/// Предел одного интервала между итерациями (секунды): защита от бесконечных и огромных
+/// значений при частоте, близкой к нулю.
+const MAX_INTERVAL_SECS: f64 = 3600.0;
+
+/// Сколько ждать завершения прерванных итераций после конца `drain`.
+const ABORT_GRACE: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone)]
 pub struct SchedulerConfig {
@@ -30,7 +39,7 @@ pub struct SchedulerConfig {
     pub arrival: Arrival,
     pub max_in_flight: u32,
     pub mode: Mode,
-    /// Сколько ждать активные итерации после конца или остановки.
+    /// Сколько ждать активные итерации после конца или остановки; оставшиеся прерываются.
     pub drain: Duration,
 }
 
@@ -89,6 +98,55 @@ impl ErrorLimiter {
     }
 }
 
+/// Секунды в `Duration` без паники: отрицательное и NaN — ноль, бесконечное и огромное —
+/// не больше `MAX_INTERVAL_SECS`.
+fn secs(x: f64) -> Duration {
+    if x.is_nan() || x <= 0.0 {
+        Duration::ZERO
+    } else {
+        Duration::from_secs_f64(x.min(MAX_INTERVAL_SECS))
+    }
+}
+
+/// Интервал до следующей итерации при частоте `rate` (> 0).
+fn interval(arrival: Arrival, rate: f64) -> Duration {
+    match arrival {
+        Arrival::Constant => secs(1.0 / rate),
+        Arrival::Poisson => {
+            let u: f64 = rand::rng().random();
+            secs(-(1.0 - u).ln() / rate)
+        }
+    }
+}
+
+/// Срок следующей итерации после смены частоты `old` → `new` в начале секунды `now`.
+/// `None` — частота нулевая, итерации не выпускаются до следующей секунды.
+fn reschedule(
+    arrival: Arrival,
+    due: Option<Instant>,
+    old: f64,
+    new: f64,
+    now: Instant,
+) -> Option<Instant> {
+    // NaN тоже считается нулевой частотой.
+    if new.is_nan() || new <= 0.0 {
+        return None;
+    }
+    match (arrival, due) {
+        // После нулевой частоты ровный поток начинается сразу, как в начале прогона.
+        (Arrival::Constant, None) => Some(now),
+        // Экспоненциальный интервал без памяти: разыгрывается заново по новой частоте.
+        (Arrival::Poisson, None) => Some(now + interval(arrival, new)),
+        (Arrival::Poisson, Some(_)) if old != new => Some(now + interval(arrival, new)),
+        // Ровный поток: остаток ожидания масштабируется на `old / new`.
+        (Arrival::Constant, Some(d)) if old != new => {
+            let left = d.saturating_duration_since(now).as_secs_f64();
+            Some(now + secs(left * old / new))
+        }
+        (_, d) => d,
+    }
+}
+
 /// Общее для всех задач прогона.
 struct Shared {
     suite: Arc<Suite>,
@@ -96,7 +154,9 @@ struct Shared {
     run_ctx: Arc<RunContext>,
     executor: Arc<dyn StepExecutor>,
     recorder: SharedRecorder,
-    events: Sender<Event>,
+    /// Канал событий; `run` забирает его перед возвратом, чтобы канал закрылся, даже если
+    /// какая-то задача пережила прогон.
+    events: Mutex<Option<Sender<Event>>>,
     limiter: ErrorLimiter,
     /// В `smoke` примеры не ограничиваются.
     limit_errors: bool,
@@ -108,30 +168,46 @@ impl Shared {
         self.start.elapsed().as_secs()
     }
 
+    async fn send(&self, event: Event) {
+        let tx = self.events.lock().expect("events lock").clone();
+        if let Some(tx) = tx {
+            let _ = tx.send(event).await;
+        }
+    }
+
+    fn close_events(&self) {
+        self.events.lock().expect("events lock").take();
+    }
+
     async fn report(&self, scenario: &str, step: &str, operation: &str, e: StepError) {
         let t = self.elapsed_secs();
         if self.limit_errors && !self.limiter.allow(e.code.as_str(), operation, t) {
             return;
         }
-        let _ = self
-            .events
-            .send(Event::Error(ErrorSample {
-                t,
-                code: e.code.as_str().to_string(),
-                operation: operation.to_string(),
-                scenario: scenario.to_string(),
-                step: step.to_string(),
-                agent: self.run_ctx.agent_id.clone(),
-                message: e.message,
-                request: e.request,
-                response: e.response,
-            }))
-            .await;
+        self.send(Event::Error(ErrorSample {
+            t,
+            code: e.code.as_str().to_string(),
+            operation: operation.to_string(),
+            scenario: scenario.to_string(),
+            step: step.to_string(),
+            agent: self.run_ctx.agent_id.clone(),
+            message: e.message,
+            request: e.request,
+            response: e.response,
+        }))
+        .await;
     }
 }
 
 /// Одна итерация сценария: шаги по порядку, `on_fail: stop` прерывает после первой ошибки.
-async fn run_iteration(sh: &Shared, scenario_index: usize, iteration: u64) {
+/// `abort` прерывает итерацию между шагами и посреди шага (зависший исполнитель её не
+/// удержит); прерванный шаг и итерация целиком не записываются.
+async fn run_iteration(
+    sh: &Shared,
+    scenario_index: usize,
+    iteration: u64,
+    abort: &CancellationToken,
+) {
     let scenario = &sh.suite.scenarios[scenario_index];
     let ids = scenario.step_ids();
     let mut ctx = IterationCtx::new(&sh.run_ctx, iteration);
@@ -141,7 +217,15 @@ async fn run_iteration(sh: &Shared, scenario_index: usize, iteration: u64) {
         ctx.begin_step(id);
         let operation = step.action.operation().to_string();
         let started = Instant::now();
-        let result = sh.executor.execute(step, &mut ctx).await;
+        let result = tokio::select! {
+            biased;
+            _ = abort.cancelled() => return,
+            r = sh.executor.execute(step, &mut ctx) => r,
+        };
+        // После прерывания запись в `Recorder` запрещена: хвостовой `tick` уже мог уйти.
+        if abort.is_cancelled() {
+            return;
+        }
         let measured_us = started.elapsed().as_micros() as u64;
         match result {
             Ok(out) => {
@@ -168,12 +252,19 @@ async fn run_iteration(sh: &Shared, scenario_index: usize, iteration: u64) {
                 if first_error.is_none() {
                     first_error = Some(e.code);
                 }
-                sh.report(&scenario.id, id, &operation, e).await;
+                tokio::select! {
+                    biased;
+                    _ = abort.cancelled() => return,
+                    _ = sh.report(&scenario.id, id, &operation, e) => {}
+                }
                 if scenario.on_fail == OnFail::Stop {
                     break;
                 }
             }
         }
+    }
+    if abort.is_cancelled() {
+        return;
     }
     sh.recorder
         .lock()
@@ -181,7 +272,9 @@ async fn run_iteration(sh: &Shared, scenario_index: usize, iteration: u64) {
         .iteration(&scenario.id, total_us, first_error);
 }
 
-/// Цикл выпуска итераций одного сценария по расписанию.
+/// Цикл выпуска итераций одного сценария по расписанию. Спит до ближайшего из: срока
+/// итерации, границы секунды, конца таймлайна; на границе секунды частота берётся из
+/// таймлайна заново, поэтому длинный интервал на низкой частоте не переживает её рост.
 async fn scenario_loop(
     sh: Arc<Shared>,
     scenario_index: usize,
@@ -189,6 +282,7 @@ async fn scenario_loop(
     semaphore: Arc<Semaphore>,
     tracker: TaskTracker,
     cancel: CancellationToken,
+    abort: CancellationToken,
 ) {
     let scenario = &sh.suite.scenarios[scenario_index];
     let drives = scenario.drives().to_string();
@@ -204,77 +298,81 @@ async fn scenario_loop(
         .iter()
         .map(|s| s.action.operation().to_string())
         .collect();
+    let arrival = sh.cfg.arrival;
+    let rate_at = |second: u64| target * pct_at(&sh.cfg.timeline, second) / 100.0 / drives_steps;
+    let end = sh.start + total;
     let mut iteration = 0u64;
-    let mut next = Instant::now();
+    let mut second = Instant::now().saturating_duration_since(sh.start).as_secs();
+    let mut rate = rate_at(second);
+    // Срок следующей итерации; `None` — частота нулевая, ждём следующую секунду.
+    let mut due = (rate > 0.0).then(Instant::now);
     loop {
         if cancel.is_cancelled() {
             break;
         }
-        let elapsed = sh.start.elapsed();
-        if elapsed >= total {
+        let now = Instant::now();
+        if now >= end {
             break;
         }
-        let second = elapsed.as_secs();
-        let rate = target * pct_at(&sh.cfg.timeline, second) / 100.0 / drives_steps;
-        if rate <= 0.0 {
-            // Нулевая частота: ждём следующую секунду таймлайна.
-            let boundary = sh.start + Duration::from_secs(second + 1);
-            tokio::select! {
-                _ = sleep_until(boundary) => {}
-                _ = cancel.cancelled() => break,
-            }
-            next = Instant::now();
-            continue;
+        let current = now.saturating_duration_since(sh.start).as_secs();
+        if current != second {
+            let new_rate = rate_at(current);
+            due = reschedule(arrival, due, rate, new_rate, now);
+            second = current;
+            rate = new_rate;
         }
-        match semaphore.clone().try_acquire_owned() {
-            Ok(permit) => {
-                let sh = sh.clone();
-                let n = iteration;
-                tracker.spawn(async move {
-                    run_iteration(&sh, scenario_index, n).await;
-                    drop(permit);
-                });
+        match due {
+            Some(d) if d <= now => {
+                match semaphore.clone().try_acquire_owned() {
+                    Ok(permit) => {
+                        let sh = sh.clone();
+                        let abort = abort.clone();
+                        let n = iteration;
+                        tracker.spawn(async move {
+                            run_iteration(&sh, scenario_index, n, &abort).await;
+                            drop(permit);
+                        });
+                    }
+                    Err(_) => sh
+                        .recorder
+                        .lock()
+                        .expect("recorder lock")
+                        .dropped(&scenario.id, &op_ids),
+                }
+                iteration += 1;
+                // Сроки считаются от идеального расписания: округление таймера не копится.
+                due = Some(d + interval(arrival, rate));
             }
-            Err(_) => sh
-                .recorder
-                .lock()
-                .expect("recorder lock")
-                .dropped(&scenario.id, &op_ids),
-        }
-        iteration += 1;
-        let interval = match sh.cfg.arrival {
-            Arrival::Constant => 1.0 / rate,
-            Arrival::Poisson => {
-                let u: f64 = rand::rng().random();
-                -(1.0 - u).ln() / rate
+            _ => {
+                let boundary = sh.start + Duration::from_secs(second + 1);
+                let wake = due.map_or(boundary, |d| d.min(boundary)).min(end);
+                tokio::select! {
+                    _ = sleep_until(wake) => {}
+                    _ = cancel.cancelled() => break,
+                }
             }
-        };
-        // Сроки считаются от идеального расписания: округление таймера не копится.
-        next += Duration::from_secs_f64(interval);
-        tokio::select! {
-            _ = sleep_until(next) => {}
-            _ = cancel.cancelled() => break,
         }
     }
 }
 
-/// Таймер секунд: `tick` и `phase`; возвращает номер последней отданной секунды.
-async fn ticker(sh: Arc<Shared>, total: Duration, cancel: CancellationToken) -> u64 {
+/// Таймер секунд: `tick` и `phase` каждую секунду — по таймлайну и во время доработки;
+/// останавливается по `done`. Возвращает номер последней отданной секунды.
+async fn ticker(sh: Arc<Shared>, done: CancellationToken) -> u64 {
     let mut t = 0u64;
     let mut phase = phase_index(&sh.cfg.timeline, 0);
-    let _ = sh
-        .events
-        .send(Event::Phase(PhaseEvent {
-            t: 0,
-            index: phase,
-            pct: pct_at(&sh.cfg.timeline, 0),
-        }))
-        .await;
+    sh.send(Event::Phase(PhaseEvent {
+        t: 0,
+        index: phase,
+        pct: pct_at(&sh.cfg.timeline, 0),
+    }))
+    .await;
     loop {
         let next = sh.start + Duration::from_secs(t + 1);
+        // Секунда, наступившая вместе с `done`, ещё отдаётся своим `tick`.
         tokio::select! {
+            biased;
             _ = sleep_until(next) => {}
-            _ = cancel.cancelled() => break,
+            _ = done.cancelled() => break,
         }
         t += 1;
         let lag = sh.executor.lag().await;
@@ -285,21 +383,16 @@ async fn ticker(sh: Arc<Shared>, total: Duration, cancel: CancellationToken) -> 
             }
             rec.tick(t)
         };
-        let _ = sh.events.send(Event::Tick(tick)).await;
+        sh.send(Event::Tick(tick)).await;
         let idx = phase_index(&sh.cfg.timeline, t);
         if idx != phase {
             phase = idx;
-            let _ = sh
-                .events
-                .send(Event::Phase(PhaseEvent {
-                    t,
-                    index: idx,
-                    pct: pct_at(&sh.cfg.timeline, t),
-                }))
-                .await;
-        }
-        if Duration::from_secs(t) >= total {
-            break;
+            sh.send(Event::Phase(PhaseEvent {
+                t,
+                index: idx,
+                pct: pct_at(&sh.cfg.timeline, t),
+            }))
+            .await;
         }
     }
     t
@@ -309,7 +402,8 @@ pub struct Scheduler;
 
 impl Scheduler {
     /// Прогон до конца `total_minutes` или `cancel`; события — в `events` (получатель
-    /// обязан их читать). Возвращает `Completed` или `Stopped`.
+    /// обязан их читать; канал закрыт к возврату). Возвращает `Completed`, `Stopped` или
+    /// `Failed`, если упала задача сценария или таймер.
     pub async fn run(
         suite: Arc<Suite>,
         cfg: SchedulerConfig,
@@ -329,20 +423,22 @@ impl Scheduler {
             run_ctx,
             executor,
             recorder,
-            events,
+            events: Mutex::new(Some(events)),
             limiter: ErrorLimiter::default(),
             limit_errors: mode == Mode::Run,
             start: Instant::now(),
         });
         if mode == Mode::Smoke {
+            let never = CancellationToken::new();
             for i in 0..sh.suite.scenarios.len() {
                 if cancel.is_cancelled() {
                     break;
                 }
-                run_iteration(&sh, i, 0).await;
+                run_iteration(&sh, i, 0, &never).await;
             }
             let tick = sh.recorder.lock().expect("recorder lock").tick(1);
-            let _ = sh.events.send(Event::Tick(tick)).await;
+            sh.send(Event::Tick(tick)).await;
+            sh.close_events();
             return if cancel.is_cancelled() {
                 RunStatus::Stopped
             } else {
@@ -352,6 +448,10 @@ impl Scheduler {
 
         let semaphore = Arc::new(Semaphore::new(max_in_flight));
         let tracker = TaskTracker::new();
+        // `abort` прерывает итерации, не успевшие за `drain`; `stop` его не трогает.
+        let abort = CancellationToken::new();
+        // `done` останавливает таймер после доработки.
+        let done = CancellationToken::new();
         let loops: Vec<_> = (0..sh.suite.scenarios.len())
             .map(|i| {
                 tokio::spawn(scenario_loop(
@@ -361,21 +461,43 @@ impl Scheduler {
                     semaphore.clone(),
                     tracker.clone(),
                     cancel.clone(),
+                    abort.clone(),
                 ))
             })
             .collect();
-        let ticker = tokio::spawn(ticker(sh.clone(), total, cancel.clone()));
+        let ticker = tokio::spawn(ticker(sh.clone(), done.clone()));
+        let mut failed = false;
         for l in loops {
-            let _ = l.await;
+            if let Err(e) = l.await {
+                tracing::error!(error = %e, "scenario loop failed");
+                failed = true;
+            }
         }
-        // Новые итерации больше не стартуют; активные дорабатывают до `drain`.
+        // Новые итерации больше не стартуют; активные дорабатывают до `drain`, оставшиеся
+        // прерываются, и `run` дожидается их завершения.
         tracker.close();
-        let _ = tokio::time::timeout(drain, tracker.wait()).await;
-        let last_t = ticker.await.unwrap_or(0);
-        // Хвост: итерации, завершившиеся после последнего `tick`.
+        if timeout(drain, tracker.wait()).await.is_err() {
+            abort.cancel();
+            if timeout(ABORT_GRACE, tracker.wait()).await.is_err() {
+                tracing::error!("iterations did not stop after the drain");
+            }
+        }
+        done.cancel();
+        let last_t = match ticker.await {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::error!(error = %e, "ticker failed");
+                failed = true;
+                sh.elapsed_secs()
+            }
+        };
+        // Хвост: остаток после последнего `tick`.
         let tick = sh.recorder.lock().expect("recorder lock").tick(last_t + 1);
-        let _ = sh.events.send(Event::Tick(tick)).await;
-        if cancel.is_cancelled() {
+        sh.send(Event::Tick(tick)).await;
+        sh.close_events();
+        if failed {
+            RunStatus::Failed
+        } else if cancel.is_cancelled() {
             RunStatus::Stopped
         } else {
             RunStatus::Completed
@@ -394,6 +516,7 @@ mod tests {
     use glafira_load_model::suite::{Action, Defaults, Expect, HttpStep, Scenario, Step};
     use std::sync::atomic::{AtomicU64, Ordering};
     use tokio::sync::mpsc;
+    use tokio::sync::mpsc::error::TryRecvError;
 
     const OP_A: &str = "http:s:GET /a";
     const OP_B: &str = "http:s:GET /b";
@@ -405,6 +528,7 @@ mod tests {
         total: AtomicU64,
         delay: Option<Duration>,
         fail: Option<String>,
+        panic_lag: bool,
     }
 
     impl Fake {
@@ -439,6 +563,7 @@ mod tests {
         }
 
         async fn lag(&self) -> BTreeMap<String, i64> {
+            assert!(!self.panic_lag, "лаг сломан");
             BTreeMap::from([("kafka_consume:t".to_string(), 3)])
         }
     }
@@ -907,5 +1032,190 @@ mod tests {
             .filter(|e| matches!(e, Event::Error(_)))
             .count();
         assert_eq!(errors, 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn iterations_outliving_the_drain_are_aborted() {
+        let fake = Arc::new(Fake {
+            delay: Some(Duration::from_secs(30)),
+            ..Default::default()
+        });
+        let (tx, mut rx) = mpsc::channel(64);
+        let recorder: SharedRecorder = Arc::new(Mutex::new(Recorder::new()));
+        let started = Instant::now();
+        let status = Scheduler::run(
+            suite(vec![scenario("s", &[OP_A], OnFail::Stop)]),
+            config(1.0, flat(2.0, 100.0), Arrival::Constant, 1000),
+            Arc::new(RunContext::default()),
+            fake.clone(),
+            recorder.clone(),
+            tx,
+            CancellationToken::new(),
+        )
+        .await;
+        let took = started.elapsed();
+        assert_eq!(status, RunStatus::Completed);
+        assert!(
+            took >= Duration::from_secs(7) && took < Duration::from_secs(8),
+            "конец таймлайна 2 с + drain 5 с: {took:?}"
+        );
+        assert_eq!(fake.count(OP_A), 2);
+        let mut events = Vec::new();
+        loop {
+            match rx.try_recv() {
+                Ok(e) => events.push(e),
+                Err(TryRecvError::Disconnected) => break,
+                Err(TryRecvError::Empty) => panic!("канал событий открыт после возврата run"),
+            }
+        }
+        let t: Vec<u64> = ticks(&events).iter().map(|t| t.t).collect();
+        assert_eq!(
+            t,
+            (1..=8).collect::<Vec<_>>(),
+            "тики идут и во время доработки"
+        );
+        // Прерванные итерации не пишут ничего — ни сразу, ни когда истёк бы их шаг.
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        let rest = recorder.lock().unwrap().tick(99);
+        assert!(
+            rest.ops.iter().all(|o| o.n == 0) && rest.scenarios.iter().all(|s| s.n == 0),
+            "сэмпл после хвостового tick"
+        );
+        let totals = recorder.lock().unwrap().finish();
+        assert_eq!(totals.ops.get(OP_A).map_or(0, |o| o.n), 0);
+        assert_eq!(totals.scenarios.get("s").map_or(0, |s| s.n), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ticks_continue_during_the_drain() {
+        let fake = Arc::new(Fake {
+            delay: Some(Duration::from_millis(2500)),
+            ..Default::default()
+        });
+        let started = Instant::now();
+        let out = run(
+            suite(vec![scenario("s", &[OP_A], OnFail::Stop)]),
+            config(1.0, flat(2.0, 100.0), Arrival::Constant, 1000),
+            fake.clone(),
+            CancellationToken::new(),
+        )
+        .await;
+        assert_eq!(out.status, RunStatus::Completed);
+        assert_eq!(started.elapsed(), Duration::from_millis(3500));
+        let series: Vec<(u64, u64)> = ticks(&out.events)
+            .iter()
+            .map(|t| (t.t, op_n(t, OP_A)))
+            .collect();
+        assert_eq!(
+            series,
+            vec![(1, 0), (2, 0), (3, 1), (4, 1)],
+            "завершение в 2.5 с — в tick 3, хвост — только остаток"
+        );
+        let totals = out.recorder.lock().unwrap().finish();
+        assert_eq!(totals.ops[OP_A].per_second_max, 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ramp_from_zero_follows_the_rate_of_the_current_second() {
+        let fake = Arc::new(Fake::default());
+        let timeline = vec![
+            Point {
+                minute: 0.0,
+                pct: 0.0,
+            },
+            Point {
+                minute: 1.0,
+                pct: 100.0,
+            },
+        ];
+        let out = run(
+            suite(vec![scenario("s", &[OP_A], OnFail::Stop)]),
+            config(1.0, timeline, Arrival::Constant, 1000),
+            fake.clone(),
+            CancellationToken::new(),
+        )
+        .await;
+        assert_eq!(out.status, RunStatus::Completed);
+        let n = fake.count(OP_A);
+        assert!(
+            (25..=35).contains(&n),
+            "средняя частота рампа 0.5 RPS за 60 с: {n}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn low_rate_does_not_run_past_the_timeline() {
+        let fake = Arc::new(Fake::default());
+        let started = Instant::now();
+        let out = run(
+            suite(vec![scenario("s", &[OP_A], OnFail::Stop)]),
+            config(0.05, flat(10.0, 100.0), Arrival::Constant, 1000),
+            fake.clone(),
+            CancellationToken::new(),
+        )
+        .await;
+        assert_eq!(out.status, RunStatus::Completed);
+        assert!(
+            started.elapsed() <= Duration::from_secs(15),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(fake.count(OP_A), 1);
+        let t: Vec<u64> = ticks(&out.events).iter().map(|t| t.t).collect();
+        assert_eq!(
+            t,
+            (1..=11).collect::<Vec<_>>(),
+            "последний tick — 10, затем хвост"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn intervals_are_capped_and_never_panic() {
+        let cap = Duration::from_secs_f64(MAX_INTERVAL_SECS);
+        assert_eq!(interval(Arrival::Constant, 0.0), cap);
+        assert_eq!(interval(Arrival::Constant, 1e-300), cap);
+        assert!(interval(Arrival::Poisson, 1e-300) <= cap);
+        assert_eq!(secs(f64::NAN), Duration::ZERO);
+        assert_eq!(secs(f64::INFINITY), cap);
+        assert_eq!(secs(-1.0), Duration::ZERO);
+        let now = Instant::now();
+        let due = Some(now + Duration::from_secs(10));
+        assert_eq!(reschedule(Arrival::Constant, due, 1.0, f64::NAN, now), None);
+        assert_eq!(reschedule(Arrival::Poisson, due, 1.0, 0.0, now), None);
+        assert_eq!(
+            reschedule(Arrival::Constant, due, 1.0, 2.0, now),
+            Some(now + Duration::from_secs(5)),
+            "остаток ожидания делится на рост частоты"
+        );
+        assert_eq!(reschedule(Arrival::Constant, due, 1.0, 1.0, now), due);
+        assert_eq!(
+            reschedule(Arrival::Constant, None, 0.0, 1.0, now),
+            Some(now)
+        );
+        assert_eq!(
+            reschedule(Arrival::Constant, due, 1.0, 1e-300, now),
+            Some(now + cap)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_panicking_ticker_fails_the_run() {
+        let fake = Arc::new(Fake {
+            panic_lag: true,
+            ..Default::default()
+        });
+        let out = run(
+            suite(vec![scenario("s", &[OP_A], OnFail::Stop)]),
+            config(10.0, flat(3.0, 100.0), Arrival::Constant, 1000),
+            fake.clone(),
+            CancellationToken::new(),
+        )
+        .await;
+        assert_eq!(out.status, RunStatus::Failed);
+        assert!(
+            (25..=35).contains(&fake.count(OP_A)),
+            "{}",
+            fake.count(OP_A)
+        );
     }
 }
