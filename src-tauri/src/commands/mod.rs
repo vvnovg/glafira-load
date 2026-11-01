@@ -1,9 +1,11 @@
+pub mod agent;
 pub mod app;
 pub mod load;
 pub mod project;
 pub mod registry;
 pub mod scan;
 pub mod settings;
+pub mod suite;
 
 use crate::error::{AppResult, ErrorCode};
 

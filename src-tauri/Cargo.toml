@@ -1,6 +1,6 @@
 [package]
 name = "glafira-load-testing"
-version = "0.1.0"
+version = "0.2.0"
 description = "Glafira for Load Testing — desktop-приложение для подготовки и сопровождения нагрузочного тестирования"
 authors = ["Glafira for Load Testing contributors"]
 edition = "2024"
@@ -27,11 +27,17 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "registry", "fmt"] }
 plist = "1"
 time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
-tokio = { version = "1", features = ["rt", "macros", "time", "process", "sync", "io-util"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "process", "sync", "io-util", "net"] }
 sys-locale = "0.3"
 glafira-load-model = { path = "../crates/glafira-load-model" }
 glafira-load-contracts = { path = "../crates/glafira-load-contracts" }
 glafira-load-xlsx = { path = "../crates/glafira-load-xlsx" }
+glafira-load-engine = { path = "../crates/glafira-load-engine" }
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+tokio-util = "0.7"
+futures = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+tar = "0.4"
 dunce = "1"
 globset = "0.4"
 ignore = "0.4"
@@ -42,3 +48,4 @@ winreg = "0.55"
 [dev-dependencies]
 tempfile = "3"
 rust_xlsxwriter = "0.102.0"
+axum = "0.8"

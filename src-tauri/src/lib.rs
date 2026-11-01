@@ -1,5 +1,6 @@
 #[macro_use]
 pub mod i18n;
+pub mod agents;
 pub mod commands;
 mod dock_name;
 pub mod error;
@@ -9,10 +10,12 @@ pub mod logging;
 pub mod policy;
 pub mod product;
 pub mod project;
+pub mod runs;
 pub mod scan;
 pub mod settings;
 pub mod state;
 pub mod storage;
+pub mod suites;
 pub mod sync;
 
 use tauri::Manager;
@@ -70,6 +73,12 @@ pub fn run() {
             commands::load::profile_get,
             commands::load::profile_save,
             commands::load::profile_compute,
+            commands::suite::suite_list,
+            commands::suite::suite_get,
+            commands::suite::suite_check,
+            commands::suite::suite_create,
+            commands::agent::agent_set_token,
+            commands::agent::agent_probe,
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");

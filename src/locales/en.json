@@ -58,7 +58,8 @@
       "dirNotEmpty": "Folder {{path}} is not empty",
       "invalidManifest": "The manifest has {{count}} problem(s)",
       "pathNotAbsolute": "Project path must be absolute: {{path}}",
-      "readOnly": "Project is read-only until its manifest is fixed: {{path}}"
+      "readOnly": "Project is read-only until its manifest is fixed: {{path}}",
+      "noEnvironment": "Environment {{id}} is not in the manifest"
     },
     "scan": {
       "busy": "A scan is already running in this project",
@@ -86,6 +87,22 @@
       "notFound": "Profile {{name}} not found",
       "invalidValue": "Invalid value in the profile: {{field}} = {{value}}",
       "tooManySteps": "Phase {{phase}} has too many steps (limit {{max}})"
+    },
+    "secrets": {
+      "keychain": "Cannot access the system secret store"
+    },
+    "suite": {
+      "notFound": "Suite {{name}} not found",
+      "badName": "Suite name must be 1–64 lowercase latin letters, digits or dashes: {{name}}",
+      "exists": "Suite {{name}} already exists",
+      "noOperations": "Select at least one operation",
+      "unsupportedKind": "Operation {{id}} of kind {{kind}} cannot be used in a suite"
+    },
+    "agent": {
+      "notFound": "Agent {{id}} is not in environment {{env}}"
+    },
+    "run": {
+      "busy": "A run is already in progress in this project"
     }
   },
   "settings": {

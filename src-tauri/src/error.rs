@@ -27,6 +27,20 @@ pub enum ErrorCode {
     PathOutsideProject,
     /// Разбор сервиса уже идёт.
     ScanBusy,
+    /// `check` сьюта нашёл ошибки; список находок — в `details` как JSON (`Vec<Finding>`).
+    SuiteInvalid,
+    /// Агент не ответил на `GET /v1/info`: сеть, таймаут 5 с, отказ в соединении, неверный токен.
+    AgentUnreachable,
+    /// Агент исполняет другой прогон (его `run_id` — в тексте ошибки).
+    AgentBusy,
+    /// `major.minor` версии агента или `format` сьюта не совпадают с приложением.
+    AgentVersion,
+    /// На агенте нет переменной `GLAFIRA_LOAD_SECRET_<ИМЯ>` для секрета сьюта.
+    SecretMissing,
+    /// У агента стенда нет токена в хранилище ОС.
+    TokenMissing,
+    /// В проекте уже идёт прогон.
+    RunBusy,
 }
 
 #[derive(Debug, Clone, Serialize, thiserror::Error)]
@@ -155,6 +169,13 @@ mod tests {
             (ErrorCode::TemplateInvalid, "TEMPLATE_INVALID", false),
             (ErrorCode::PathOutsideProject, "PATH_OUTSIDE_PROJECT", false),
             (ErrorCode::ScanBusy, "SCAN_BUSY", false),
+            (ErrorCode::SuiteInvalid, "SUITE_INVALID", false),
+            (ErrorCode::AgentUnreachable, "AGENT_UNREACHABLE", false),
+            (ErrorCode::AgentBusy, "AGENT_BUSY", false),
+            (ErrorCode::AgentVersion, "AGENT_VERSION", false),
+            (ErrorCode::SecretMissing, "SECRET_MISSING", false),
+            (ErrorCode::TokenMissing, "TOKEN_MISSING", false),
+            (ErrorCode::RunBusy, "RUN_BUSY", false),
         ] {
             assert_eq!(serde_json::to_value(code).unwrap(), name);
             assert_eq!(
