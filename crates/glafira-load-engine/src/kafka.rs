@@ -6,12 +6,16 @@
 //! Лаг снимается раз в секунду по смещениям. Рендер шаблонов — до первого `await`.
 //! `expect` и `extract` шага `kafka_consume` применяются к значению сообщения (спека §3.4),
 //! тексты ошибок и примеры маскируются значениями секретов прогона.
+//!
+//! Каждое сообщение в буфере получает возрастающий номер `seq`: ожидающий шаг при каждом
+//! пробуждении просматривает только сообщения новее последнего просмотренного, а не весь буфер.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use glafira_load_model::schema::SchemaSummary;
 use glafira_load_model::suite::expr::{
     Context, ExprError, parse_template, render_json, render_string,
 };
@@ -96,6 +100,12 @@ pub fn consumer_config(
         .set("auto.offset.reset", "latest")
         .set("enable.auto.commit", "false")
         .set("enable.partition.eof", "false");
+    // Кооперативный протокол: при поздних ребалансах в `rebalance` приходят только добавленные
+    // партиции, и на high watermark переставляются лишь они; при eager-протоколе каждая
+    // ребалансировка переставляла бы все партиции и теряла сообщения между ними.
+    if !defaults.contains_key("partition.assignment.strategy") {
+        c.set("partition.assignment.strategy", "cooperative-sticky");
+    }
     c
 }
 
@@ -149,18 +159,20 @@ pub fn mask_error(e: StepError, secrets: &[String]) -> StepError {
 }
 
 /// Проверки `expect` и значения `extract` шага `kafka_consume` по значению сообщения;
-/// статуса у сообщения нет, задержка — ожидание совпадения.
+/// статуса у сообщения нет, задержка — ожидание совпадения. `response_schema` — схема
+/// сообщения операции из реестра (для `expect.schema: response`).
 pub fn check_message(
     step: &Step,
     out: &StepOutcome,
     ctx: &mut IterationCtx<'_>,
+    response_schema: Option<&SchemaSummary>,
 ) -> Result<(), StepError> {
     check_expect(
         &step.expect,
         None,
         out.body.as_ref(),
         out.latency_us as f64 / 1000.0,
-        None,
+        response_schema,
     )?;
     for (name, value) in extract_all(&step.extract, out.body.as_ref())? {
         ctx.store(&name, value);
@@ -186,6 +198,8 @@ pub struct Received {
     /// Длина тела в байтах (`bytes_in` шага).
     pub len: u64,
     pub at: Instant,
+    /// Номер в порядке поступления; присваивает `MessageBuffer::push` (начиная с 1).
+    pub seq: u64,
 }
 
 impl Received {
@@ -197,6 +211,7 @@ impl Received {
             body: payload.and_then(|p| serde_json::from_slice(p).ok()),
             len: payload.map_or(0, |p| p.len() as u64),
             at: Instant::now(),
+            seq: 0,
         }
     }
 }
@@ -266,11 +281,13 @@ impl MatchSpec {
     }
 }
 
-/// Буфер последних сообщений: по размеру и по возрасту.
+/// Буфер последних сообщений: по размеру и по возрасту. Сообщения лежат в порядке
+/// поступления, их `seq` строго возрастает от начала к концу.
 pub struct MessageBuffer {
     items: VecDeque<Received>,
     max: usize,
     ttl: Duration,
+    next_seq: u64,
 }
 
 impl MessageBuffer {
@@ -279,15 +296,21 @@ impl MessageBuffer {
             items: VecDeque::new(),
             max,
             ttl,
+            next_seq: 1,
         }
     }
 
-    pub fn push(&mut self, m: Received) {
+    /// Добавляет сообщение, присваивает ему следующий `seq` и возвращает этот номер.
+    pub fn push(&mut self, mut m: Received) -> u64 {
         self.prune(m.at);
         if self.items.len() >= self.max {
             self.items.pop_front();
         }
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        m.seq = seq;
         self.items.push_back(m);
+        seq
     }
 
     /// Выбрасывает сообщения старше `ttl` относительно `now`.
@@ -301,10 +324,33 @@ impl MessageBuffer {
         }
     }
 
-    /// Первое совпавшее сообщение; оно удаляется из буфера.
+    /// Первое совпавшее сообщение во всём буфере; оно удаляется из буфера.
     pub fn take(&mut self, spec: &MatchSpec) -> Option<Received> {
-        let i = self.items.iter().position(|m| spec.matches(m))?;
-        self.items.remove(i)
+        self.take_since(spec, 0).0
+    }
+
+    /// Первое совпавшее сообщение среди тех, у кого `seq > after` (0 — весь буфер); оно
+    /// удаляется из буфера. Второе значение — наибольший просмотренный `seq`: его ожидающий
+    /// шаг передаёт как `after` при следующем пробуждении, чтобы не проверять старое повторно.
+    pub fn take_since(&mut self, spec: &MatchSpec, after: u64) -> (Option<Received>, u64) {
+        self.take_since_by(after, |m| spec.matches(m))
+    }
+
+    /// `take_since` с произвольным условием; стоимость — O(число сообщений новее `after`).
+    fn take_since_by(
+        &mut self,
+        after: u64,
+        mut matches: impl FnMut(&Received) -> bool,
+    ) -> (Option<Received>, u64) {
+        let last = self.items.back().map_or(after, |m| m.seq.max(after));
+        // Буфер упорядочен по `seq`: граница ищется с конца и стоит O(новых сообщений).
+        let start = self
+            .items
+            .iter()
+            .rposition(|m| m.seq <= after)
+            .map_or(0, |i| i + 1);
+        let found = (start..self.items.len()).find(|&i| matches(&self.items[i]));
+        (found.and_then(|i| self.items.remove(i)), last)
     }
 
     pub fn len(&self) -> usize {
@@ -465,11 +511,32 @@ struct ConsumerHub {
     consumer: HubConsumer,
     topics: Vec<String>,
     buffer: Mutex<MessageBuffer>,
-    /// Счётчик принятых сообщений: будит ожидающие шаги.
+    /// `seq` последнего принятого сообщения: будит ожидающие шаги.
     seq: watch::Sender<u64>,
     /// Операция `kafka_consume:<topic>` → лаг, обновляется раз в секунду.
     lag: Mutex<BTreeMap<String, i64>>,
+    /// Остановка прогона: гасит фоновые задачи и будит ожидающие шаги.
     cancel: CancellationToken,
+}
+
+impl ConsumerHub {
+    fn new(consumer: HubConsumer, topics: &[String], cancel: CancellationToken) -> Self {
+        let (seq, _) = watch::channel(0u64);
+        Self {
+            consumer,
+            topics: topics.to_vec(),
+            buffer: Mutex::new(MessageBuffer::new(BUFFER_MAX, BUFFER_TTL)),
+            seq,
+            lag: Mutex::new(BTreeMap::new()),
+            cancel,
+        }
+    }
+
+    /// Кладёт сообщение в буфер и будит ожидающие шаги.
+    fn accept(&self, m: Received) {
+        let seq = self.buffer.lock().expect("consumer buffer").push(m);
+        self.seq.send_replace(seq);
+    }
 }
 
 async fn read_loop(hub: Arc<ConsumerHub>) {
@@ -477,11 +544,7 @@ async fn read_loop(hub: Arc<ConsumerHub>) {
         tokio::select! {
             _ = hub.cancel.cancelled() => break,
             next = hub.consumer.recv() => match next {
-                Ok(m) => {
-                    let received = Received::from_message(&m);
-                    hub.buffer.lock().expect("consumer buffer").push(received);
-                    hub.seq.send_modify(|n| *n += 1);
-                }
+                Ok(m) => hub.accept(Received::from_message(&m)),
                 Err(e) => {
                     tracing::warn!(error = %e, "kafka consumer");
                     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -558,6 +621,8 @@ pub struct KafkaExecutor {
     avro: AvroCodec,
     /// Формы секретов прогона для маскирования ошибок (`secret_forms`).
     secrets: Vec<String>,
+    /// Id операции `kafka_consume` → схема сообщения из реестра (`expect.schema: response`).
+    schemas: BTreeMap<String, SchemaSummary>,
     cancel: CancellationToken,
 }
 
@@ -565,6 +630,10 @@ impl KafkaExecutor {
     /// `consume_topics` — топики всех `kafka_consume` сьюта (пусто — потребитель не создаётся);
     /// `avro_schemas` — id операции `kafka_produce` с `encoding: avro` → текст `.avsc`.
     /// Возвращает после назначения партиций (до `ASSIGNMENT_WAIT`), чтобы не терять первые сообщения.
+    ///
+    /// В отличие от `HttpExecutor::new`, секреты сюда не передаются: фабрика исполнителей
+    /// ОБЯЗАНА вызвать `with_secrets` (иначе ошибки и примеры не маскируются) и
+    /// `with_response_schemas` (иначе `expect.schema: response` на `kafka_consume` всегда падает).
     pub async fn new(
         bootstrap: &str,
         defaults: &BTreeMap<String, String>,
@@ -589,15 +658,7 @@ impl KafkaExecutor {
             consumer
                 .subscribe(&names)
                 .map_err(|e| format!("kafka subscribe: {e}"))?;
-            let (seq, _) = watch::channel(0u64);
-            let hub = Arc::new(ConsumerHub {
-                consumer,
-                topics: consume_topics.to_vec(),
-                buffer: Mutex::new(MessageBuffer::new(BUFFER_MAX, BUFFER_TTL)),
-                seq,
-                lag: Mutex::new(BTreeMap::new()),
-                cancel: cancel.clone(),
-            });
+            let hub = Arc::new(ConsumerHub::new(consumer, consume_topics, cancel.clone()));
             // Ребаланс идёт внутри poll: читающая задача стартует до ожидания назначения.
             tokio::spawn(read_loop(hub.clone()));
             if let Err(e) = wait_assignment(&hub.consumer, ASSIGNMENT_WAIT).await {
@@ -612,17 +673,26 @@ impl KafkaExecutor {
             hub,
             avro,
             secrets: Vec::new(),
+            schemas: BTreeMap::new(),
             cancel,
         })
     }
 
-    /// Значения секретов прогона: ими маскируются тексты ошибок и примеры.
+    /// Значения секретов прогона: ими маскируются тексты ошибок и примеры. Без этого вызова
+    /// маскирования нет — фабрика исполнителей обязана его сделать (см. `new`).
     pub fn with_secrets(mut self, secrets: &[String]) -> Self {
         self.secrets = secret_forms(secrets);
         self
     }
 
-    /// Останавливает фоновые задачи потребителя.
+    /// Схемы сообщений операций `kafka_consume` из реестра (id операции → схема, как у
+    /// `HttpExecutor::with_schemas`) — для `expect.schema: response`.
+    pub fn with_response_schemas(mut self, schemas: BTreeMap<String, SchemaSummary>) -> Self {
+        self.schemas = schemas;
+        self
+    }
+
+    /// Останавливает фоновые задачи потребителя и будит ожидающие шаги `kafka_consume`.
     pub fn shutdown(&self) {
         self.cancel.cancel();
     }
@@ -735,13 +805,16 @@ impl KafkaExecutor {
         let started = Instant::now();
         let deadline = tokio::time::Instant::now() + r.timeout;
         // Подписка до проверки буфера: сообщение, пришедшее между проверкой и ожиданием, не теряется.
-        let mut seq = hub.seq.subscribe();
+        let mut wake = hub.seq.subscribe();
+        // Наибольший просмотренный `seq`: первый проход — весь буфер, дальше только новое.
+        let mut seen = 0u64;
         loop {
-            let taken = {
+            let (taken, last) = {
                 let mut buffer = hub.buffer.lock().expect("consumer buffer");
                 buffer.prune(Instant::now());
-                buffer.take(&r.spec)
+                buffer.take_since(&r.spec, seen)
             };
+            seen = last;
             if let Some(m) = taken {
                 return Ok(StepOutcome {
                     latency_us: started.elapsed().as_micros() as u64,
@@ -751,7 +824,14 @@ impl KafkaExecutor {
                     status: None,
                 });
             }
-            match tokio::time::timeout_at(deadline, seq.changed()).await {
+            let changed = tokio::select! {
+                biased;
+                _ = hub.cancel.cancelled() => {
+                    return Err(step_err(StepCode::KafkaConsume, "consumer stopped", None));
+                }
+                changed = tokio::time::timeout_at(deadline, wake.changed()) => changed,
+            };
+            match changed {
                 Ok(Ok(())) => continue,
                 Ok(Err(_)) => {
                     return Err(step_err(StepCode::KafkaConsume, "consumer stopped", None));
@@ -796,7 +876,8 @@ impl StepExecutor for KafkaExecutor {
                     prepare_consume(c, &*ctx).map_err(|e| mask_error(e, &self.secrets))?;
                 let described = request.spec.describe();
                 let out = self.consume(request).await?;
-                check_message(step, &out, ctx).map_err(|e| {
+                let schema = self.schemas.get(&c.operation);
+                check_message(step, &out, ctx, schema).map_err(|e| {
                     let body = out.body.as_ref().map(|b| b.to_string());
                     mask_error(e.with_sample(Some(described), body), &self.secrets)
                 })?;
@@ -826,7 +907,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use glafira_load_model::suite::expr::Context;
-    use glafira_load_model::suite::{ExistsTag, Expect, Matcher};
+    use glafira_load_model::suite::{ExistsTag, Expect, Matcher, SchemaExpect};
     use serde_json::json;
 
     use super::*;
@@ -878,6 +959,7 @@ mod tests {
             len: 10,
             body,
             at,
+            seq: 0,
         }
     }
 
@@ -927,6 +1009,20 @@ mod tests {
         assert_eq!(c.get("group.id"), Some("glafira-load-r1-gen-1"));
         assert_eq!(c.get("auto.offset.reset"), Some("latest"));
         assert_eq!(c.get("enable.auto.commit"), Some("false"));
+        assert_eq!(
+            c.get("partition.assignment.strategy"),
+            Some("cooperative-sticky"),
+            "кооперативный ребаланс по умолчанию"
+        );
+        let own = BTreeMap::from([(
+            "partition.assignment.strategy".to_string(),
+            "range".to_string(),
+        )]);
+        assert_eq!(
+            consumer_config("k:9092", &own, "r1", "gen-1").get("partition.assignment.strategy"),
+            Some("range"),
+            "стратегия из defaults.kafka не перекрывается"
+        );
     }
 
     #[test]
@@ -1138,7 +1234,7 @@ mod tests {
             body: Some(json!({"qty": 2})),
             ..StepOutcome::default()
         };
-        check_message(&step, &out, &mut ctx).unwrap();
+        check_message(&step, &out, &mut ctx, None).unwrap();
         assert_eq!(
             ctx.step("wait", "qty"),
             Some(json!(2)),
@@ -1150,7 +1246,9 @@ mod tests {
             ..out.clone()
         };
         assert!(matches!(
-            check_message(&step, &slow, &mut ctx).unwrap_err().code,
+            check_message(&step, &slow, &mut ctx, None)
+                .unwrap_err()
+                .code,
             StepCode::ExpectMaxMs
         ));
         let other = StepOutcome {
@@ -1158,7 +1256,9 @@ mod tests {
             ..out.clone()
         };
         assert!(matches!(
-            check_message(&step, &other, &mut ctx).unwrap_err().code,
+            check_message(&step, &other, &mut ctx, None)
+                .unwrap_err()
+                .code,
             StepCode::ExpectJsonpath
         ));
         let no_expect = Step {
@@ -1167,10 +1267,296 @@ mod tests {
         };
         let not_json = StepOutcome { body: None, ..out };
         assert!(matches!(
-            check_message(&no_expect, &not_json, &mut ctx)
+            check_message(&no_expect, &not_json, &mut ctx, None)
                 .unwrap_err()
                 .code,
             StepCode::ExtractMissing
         ));
+    }
+
+    #[test]
+    fn buffer_scans_only_messages_after_seen_seq() {
+        let t0 = Instant::now();
+        let mut buf = MessageBuffer::new(100, Duration::from_secs(60));
+        let seqs: Vec<u64> = (0..5)
+            .map(|i| buf.push(received("t", Some(&format!("k{i}")), None, t0)))
+            .collect();
+        assert_eq!(seqs, [1, 2, 3, 4, 5], "seq возрастает с 1");
+
+        // Первый проход — весь буфер.
+        let mut evaluated = Vec::new();
+        let (none, last) = buf.take_since_by(0, |m| {
+            evaluated.push(m.seq);
+            false
+        });
+        assert!(none.is_none());
+        assert_eq!((evaluated.clone(), last), (vec![1, 2, 3, 4, 5], 5));
+
+        // Пробуждение без новых сообщений не проверяет ничего.
+        evaluated.clear();
+        let (_, last) = buf.take_since_by(last, |m| {
+            evaluated.push(m.seq);
+            false
+        });
+        assert!(
+            evaluated.is_empty(),
+            "старые сообщения не проверяются повторно"
+        );
+        assert_eq!(last, 5);
+
+        // Пришли три новых — проверяются только они.
+        for i in 5..8 {
+            buf.push(received("t", Some(&format!("k{i}")), None, t0));
+        }
+        let (_, last) = buf.take_since_by(last, |m| {
+            evaluated.push(m.seq);
+            false
+        });
+        assert_eq!((evaluated.clone(), last), (vec![6, 7, 8], 8));
+
+        // Совпадение ищется только среди новых: старый k1 не берётся, новый k6 — берётся.
+        assert!(buf.take_since(&spec("t", Some("k1"), &[]), 5).0.is_none());
+        let (got, last) = buf.take_since(&spec("t", Some("k6"), &[]), 5);
+        assert_eq!((got.map(|m| m.seq), last), (Some(7), 8));
+        assert_eq!(buf.len(), 7, "совпавшее удалено");
+        // После изъятия из середины граница по-прежнему находится верно.
+        evaluated.clear();
+        let (_, last) = buf.take_since_by(6, |m| {
+            evaluated.push(m.seq);
+            false
+        });
+        assert_eq!((evaluated, last), (vec![8], 8));
+        assert!(
+            buf.take(&spec("t", Some("k1"), &[])).is_some(),
+            "take видит весь буфер"
+        );
+    }
+
+    /// Исполнитель без брокера: клиенты создаются, но никуда не подключаются; фоновых задач нет,
+    /// сообщения кладутся в буфер вручную (`ConsumerHub::accept`).
+    fn offline(topics: &[&str]) -> KafkaExecutor {
+        let none = BTreeMap::new();
+        let producer: FutureProducer = producer_config("127.0.0.1:1", &none, "a1")
+            .create()
+            .unwrap();
+        let cancel = CancellationToken::new();
+        let hub = (!topics.is_empty()).then(|| {
+            let consumer: HubConsumer = consumer_config("127.0.0.1:1", &none, "r1", "a1")
+                .create_with_context(StartAtEnd)
+                .unwrap();
+            let topics: Vec<String> = topics.iter().map(|t| t.to_string()).collect();
+            Arc::new(ConsumerHub::new(consumer, &topics, cancel.clone()))
+        });
+        KafkaExecutor {
+            producer,
+            hub,
+            avro: AvroCodec::new(None, &BTreeMap::new()).unwrap(),
+            secrets: Vec::new(),
+            schemas: BTreeMap::new(),
+            cancel,
+        }
+    }
+
+    fn consume_request(topic: &str, key: &str, timeout_ms: u64) -> ConsumeRequest {
+        ConsumeRequest {
+            topic: topic.into(),
+            spec: spec(topic, Some(key), &[]),
+            timeout: Duration::from_millis(timeout_ms),
+        }
+    }
+
+    #[tokio::test]
+    async fn waiting_consume_gets_a_later_message_and_shutdown_wakes_waiters() {
+        let ex = Arc::new(offline(&["orders.created"]));
+        let hub = ex.hub.clone().unwrap();
+        hub.accept(received(
+            "orders.created",
+            Some("old"),
+            None,
+            Instant::now(),
+        ));
+
+        let waiter = {
+            let ex = ex.clone();
+            tokio::spawn(async move {
+                ex.consume(consume_request("orders.created", "o-1", 10_000))
+                    .await
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        hub.accept(received(
+            "orders.created",
+            Some("o-1"),
+            Some(json!({"qty": 2})),
+            Instant::now(),
+        ));
+        let out = tokio::time::timeout(Duration::from_secs(5), waiter)
+            .await
+            .expect("waiter woke up")
+            .unwrap()
+            .unwrap();
+        assert_eq!(out.body, Some(json!({"qty": 2})));
+
+        // После shutdown ожидание завершается сразу, а не по таймауту шага.
+        let waiter = {
+            let ex = ex.clone();
+            tokio::spawn(async move {
+                ex.consume(consume_request("orders.created", "o-2", 60_000))
+                    .await
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let started = Instant::now();
+        ex.shutdown();
+        let err = tokio::time::timeout(Duration::from_secs(5), waiter)
+            .await
+            .expect("shutdown wakes the waiter")
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(
+            (err.code, err.message.as_str()),
+            (StepCode::KafkaConsume, "consumer stopped")
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
+        // Новые ожидания после shutdown тоже не ждут.
+        let err = ex
+            .consume(consume_request("orders.created", "o-3", 60_000))
+            .await
+            .unwrap_err();
+        assert_eq!(err.message, "consumer stopped");
+    }
+
+    fn consume_step_with_schema() -> Step {
+        Step {
+            id: Some("wait".into()),
+            action: Action::KafkaConsume(ConsumeStep {
+                operation: "kafka_consume:orders.created".into(),
+                match_: Match {
+                    key: Some("o-1".into()),
+                    jsonpath: BTreeMap::new(),
+                },
+                timeout_ms: 1_000,
+            }),
+            expect: Expect {
+                schema: Some(SchemaExpect::Response),
+                ..Expect::default()
+            },
+            extract: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn check_message_validates_the_response_schema() {
+        let run = RunContext::default();
+        let mut ctx = IterationCtx::new(&run, 0);
+        ctx.begin_step("wait");
+        let step = consume_step_with_schema();
+        let out = StepOutcome {
+            body: Some(json!({"orderId": "o-1"})),
+            ..StepOutcome::default()
+        };
+        let good = SchemaSummary::object(
+            "body",
+            vec![SchemaSummary::leaf("orderId", "string").required(true)],
+        );
+        let strict = SchemaSummary::object(
+            "body",
+            vec![SchemaSummary::leaf("missing", "string").required(true)],
+        );
+        check_message(&step, &out, &mut ctx, Some(&good)).unwrap();
+        assert_eq!(
+            check_message(&step, &out, &mut ctx, Some(&strict))
+                .unwrap_err()
+                .code,
+            StepCode::ExpectSchema
+        );
+        assert_eq!(
+            check_message(&step, &out, &mut ctx, None).unwrap_err().code,
+            StepCode::ExpectSchema,
+            "без схемы в реестре проверка не проходит"
+        );
+    }
+
+    #[tokio::test]
+    async fn consume_step_uses_response_schemas_by_operation() {
+        let good = SchemaSummary::object(
+            "body",
+            vec![SchemaSummary::leaf("orderId", "string").required(true)],
+        );
+        let strict = SchemaSummary::object(
+            "body",
+            vec![SchemaSummary::leaf("missing", "string").required(true)],
+        );
+        let step = consume_step_with_schema();
+        let run = RunContext::default();
+        for (schema, passes) in [(good, true), (strict, false)] {
+            let ex = offline(&["orders.created"]).with_response_schemas(BTreeMap::from([(
+                "kafka_consume:orders.created".to_string(),
+                schema,
+            )]));
+            ex.hub.as_ref().unwrap().accept(received(
+                "orders.created",
+                Some("o-1"),
+                Some(json!({"orderId": "o-1"})),
+                Instant::now(),
+            ));
+            let mut ctx = IterationCtx::new(&run, 0);
+            ctx.begin_step("wait");
+            let result = ex.execute(&step, &mut ctx).await;
+            if passes {
+                assert_eq!(result.unwrap().body, Some(json!({"orderId": "o-1"})));
+            } else {
+                assert_eq!(result.unwrap_err().code, StepCode::ExpectSchema);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_masks_secrets_after_with_secrets() {
+        let mut run = RunContext::default();
+        run.secrets
+            .insert("API_TOKEN".to_string(), "s3cr3t".to_string());
+        let secrets = run.secret_values();
+        let produce = |key: &str, value_text: &str, encoding| Step {
+            id: Some("send".into()),
+            action: Action::KafkaProduce(ProduceStep {
+                operation: "kafka_produce:orders.paid".into(),
+                key: Some(key.into()),
+                value: None,
+                value_text: Some(value_text.into()),
+                headers: BTreeMap::new(),
+                encoding,
+            }),
+            expect: Expect::default(),
+            extract: BTreeMap::new(),
+        };
+        // Ошибка рендера: текст выражения содержит значение секрета.
+        let render = produce("{{steps.s3cr3t.x}}", "{}", Encoding::Json);
+        // Ошибка до отправки: пример — отрендеренный `value_text` с секретом.
+        let avro = produce("k", "token {{secret API_TOKEN}}", Encoding::Avro);
+
+        let ex = offline(&[]);
+        let mut ctx = IterationCtx::new(&run, 0);
+        ctx.begin_step("send");
+        let raw = ex.execute(&render, &mut ctx).await.unwrap_err();
+        assert!(
+            raw.message.contains("s3cr3t"),
+            "без with_secrets маскирования нет: {raw:?}"
+        );
+
+        let ex = offline(&[]).with_secrets(&secrets);
+        let e = ex.execute(&render, &mut ctx).await.unwrap_err();
+        assert_eq!(e.code, StepCode::ExtractMissing);
+        assert!(
+            !e.message.contains("s3cr3t") && e.message.contains("***"),
+            "{e:?}"
+        );
+        let e = ex.execute(&avro, &mut ctx).await.unwrap_err();
+        assert_eq!(e.code, StepCode::AvroEncode);
+        let request = e.request.unwrap();
+        assert!(
+            !request.contains("s3cr3t") && request.contains("token ***"),
+            "{request}"
+        );
     }
 }
