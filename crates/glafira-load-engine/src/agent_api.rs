@@ -91,6 +91,10 @@ pub struct OpTick {
     pub bytes_out: u64,
     #[serde(default)]
     pub lag: Option<i64>,
+    /// Гистограмма секунды (`hdrhistogram` V2 + deflate, base64), если были замеры:
+    /// контроллер сливает по ней перцентили агентов точно (см. `metrics::merge_ticks`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hist: Option<String>,
 }
 
 /// Метрики сценария за одну секунду (итерации целиком).
@@ -106,6 +110,9 @@ pub struct ScenarioTick {
     pub p95: f64,
     pub p99: f64,
     pub max: f64,
+    /// Гистограмма секунды, как у `OpTick::hist`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hist: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -256,6 +263,7 @@ mod tests {
                 bytes_in: 120_400,
                 bytes_out: 51_200,
                 lag: None,
+                hist: Some("SElTVA==".into()),
             }],
             scenarios: vec![ScenarioTick {
                 id: "order-flow".into(),
@@ -266,6 +274,7 @@ mod tests {
                 p95: 200.0,
                 p99: 300.0,
                 max: 500.0,
+                hist: None,
             }],
         }
     }
@@ -391,8 +400,23 @@ mod tests {
             assert_eq!(again, event);
         }
         let text = serde_json::to_string(&Event::Tick(tick())).unwrap();
+        assert!(text.starts_with(r#"{"type":"tick","t":12,"#), "{text}");
         assert!(text.contains("\"bytesIn\":120400"), "{text}");
-        assert!(text.contains("\"status\":\"completed\"") || !text.contains("status"));
+        assert!(!text.contains("\"status\""), "у среза нет статуса: {text}");
+        // `hist` есть только у среза с замерами; без него поле не пишется.
+        assert!(text.contains("\"hist\":\"SElTVA==\""), "{text}");
+        assert_eq!(text.matches("\"hist\"").count(), 1, "{text}");
+        // Срез старого агента без `hist` читается как `None`.
+        let old: Tick = serde_json::from_str(
+            r#"{"t":1,"ops":[{"id":"op","n":0,"dropped":0,"p50":0,"p90":0,"p95":0,"p99":0,"max":0,
+                "bytesIn":0,"bytesOut":0}],"scenarios":[{"id":"sc","n":0,"dropped":0,"p50":0,"p95":0,
+                "p99":0,"max":0}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            (old.ops[0].hist.as_deref(), old.scenarios[0].hist.as_deref()),
+            (None, None)
+        );
     }
 
     #[test]

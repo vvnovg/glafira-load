@@ -3,7 +3,10 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use hdrhistogram::Histogram;
+use hdrhistogram::serialization::{Deserializer, Serializer as _, V2DeflateSerializer};
 
 use crate::agent_api::{
     AgentSummary, OpSummary, OpTick, RunStatus, ScenarioSummary, ScenarioTick, Tick,
@@ -20,6 +23,31 @@ pub const HIST_SIGFIG: u8 = 3;
 /// Гистограмма задержек в микросекундах с границами спеки.
 pub fn new_histogram() -> Histogram<u64> {
     Histogram::new_with_bounds(HIST_LOW_US, HIST_HIGH_US, HIST_SIGFIG).expect("valid bounds")
+}
+
+/// Гистограмма для поля `hist` среза: `hdrhistogram` V2 со сжатием deflate, затем base64.
+pub fn encode_hist(h: &Histogram<u64>) -> String {
+    let mut buf = Vec::new();
+    V2DeflateSerializer::new()
+        .serialize(h, &mut buf)
+        .expect("serializing a u64 histogram into memory does not fail");
+    BASE64.encode(buf)
+}
+
+/// Обратное к [`encode_hist`]: base64 → `hdrhistogram::serialization::Deserializer`.
+/// Ошибка — текстом: поле приходит от агента и может быть испорчено.
+pub fn decode_hist(text: &str) -> Result<Histogram<u64>, String> {
+    let bytes = BASE64
+        .decode(text)
+        .map_err(|e| format!("bad base64 in histogram: {e}"))?;
+    Deserializer::new()
+        .deserialize(&mut bytes.as_slice())
+        .map_err(|e| format!("bad histogram: {e:?}"))
+}
+
+/// Гистограмма для среза: `None`, если за секунду не было замеров.
+fn tick_hist(h: &Histogram<u64>) -> Option<String> {
+    (!h.is_empty()).then(|| encode_hist(h))
 }
 
 /// Один измеренный шаг.
@@ -246,6 +274,7 @@ impl Recorder {
                 bytes_in: sec.bytes_in,
                 bytes_out: sec.bytes_out,
                 lag: self.lag.get(id).copied(),
+                hist: tick_hist(&sec.hist),
             });
         }
         let mut scenarios = Vec::with_capacity(self.scenarios.len());
@@ -261,6 +290,7 @@ impl Recorder {
                 p95: pct(&sec.hist, 0.95),
                 p99: pct(&sec.hist, 0.99),
                 max: max_ms(&sec.hist),
+                hist: tick_hist(&sec.hist),
             });
         }
         Tick { t, ops, scenarios }
@@ -286,14 +316,17 @@ impl Recorder {
 
 /// Складывает итоги агентов: гистограммы — точно (`Histogram::add`), счётчики — суммой,
 /// `per_second_max` — суммой (агенты идут по одному таймлайну, пики совпадают по секундам),
-/// `seconds` — максимум.
-pub fn merge_totals(parts: &[Totals]) -> Totals {
+/// `seconds` — максимум. Гистограмма, которую нельзя сложить (границы не те, что у
+/// [`new_histogram`], — например, испорченный файл агента), — ошибка с id операции или сценария.
+pub fn merge_totals(parts: &[Totals]) -> Result<Totals, String> {
     let mut out = Totals::default();
     for p in parts {
         out.seconds = out.seconds.max(p.seconds);
         for (id, t) in &p.ops {
             let o = out.ops.entry(id.clone()).or_default();
-            o.hist.add(&t.hist).expect("same bounds");
+            o.hist
+                .add(&t.hist)
+                .map_err(|e| format!("operation `{id}`: cannot merge histograms: {e:?}"))?;
             o.n += t.n;
             add_counts(&mut o.err, &t.err);
             o.dropped += t.dropped;
@@ -303,14 +336,16 @@ pub fn merge_totals(parts: &[Totals]) -> Totals {
         }
         for (id, t) in &p.scenarios {
             let o = out.scenarios.entry(id.clone()).or_default();
-            o.hist.add(&t.hist).expect("same bounds");
+            o.hist
+                .add(&t.hist)
+                .map_err(|e| format!("scenario `{id}`: cannot merge histograms: {e:?}"))?;
             o.n += t.n;
             add_counts(&mut o.err, &t.err);
             o.dropped += t.dropped;
             o.per_second_max += t.per_second_max;
         }
     }
-    out
+    Ok(out)
 }
 
 /// Взвешенное по `n` среднее перцентиля: приближение для живого графика одной секунды.
@@ -322,14 +357,42 @@ fn weighted(acc: f64, acc_n: u64, value: f64, n: u64) -> f64 {
     }
 }
 
-/// Одна секунда разных агентов: `n`, `err`, `dropped`, байты — суммой, `max` — максимум,
-/// `lag` — суммой, перцентили — взвешенным по `n` средним (точные — из слитых гистограмм в сводке).
+/// Слитая гистограмма частей одной операции или сценария. Части без замеров (`n == 0`)
+/// пропускаются; `None`, если у какой-то части с замерами `hist` нет, он не декодируется
+/// или не складывается.
+fn merged_hist(parts: &[(u64, Option<&str>)]) -> Option<Histogram<u64>> {
+    let mut out = new_histogram();
+    for (n, hist) in parts {
+        if *n == 0 {
+            continue;
+        }
+        let h = decode_hist((*hist)?).ok()?;
+        out.add(&h).ok()?;
+    }
+    Some(out)
+}
+
+/// Одна секунда разных агентов: `n`, `err`, `dropped`, байты — суммой, `lag` — суммой.
+///
+/// Перцентили и `max` — по одному из двух путей для каждой операции и сценария:
+/// - точный: у каждой части с замерами (`n > 0`) есть декодируемый `hist` — гистограммы
+///   складываются, `p50`…`p99` и `max` берутся из слитой, а `hist` результата — она же
+///   (`None`, если замеров не было вовсе);
+/// - приближённый (агент без `hist`, испорченная или несовместимая гистограмма):
+///   перцентили — взвешенное по `n` среднее, `max` — максимум, `hist` результата — `None`.
 pub fn merge_ticks(parts: &[Tick]) -> Tick {
     let t = parts.first().map(|p| p.t).unwrap_or(0);
     let mut ops: BTreeMap<String, OpTick> = BTreeMap::new();
     let mut scenarios: BTreeMap<String, ScenarioTick> = BTreeMap::new();
+    // Гистограммы частей: id → (n, hist) по порядку частей.
+    let mut op_hists: BTreeMap<String, Vec<(u64, Option<&str>)>> = BTreeMap::new();
+    let mut sc_hists: BTreeMap<String, Vec<(u64, Option<&str>)>> = BTreeMap::new();
     for p in parts {
         for o in &p.ops {
+            op_hists
+                .entry(o.id.clone())
+                .or_default()
+                .push((o.n, o.hist.as_deref()));
             match ops.get_mut(&o.id) {
                 None => {
                     ops.insert(o.id.clone(), o.clone());
@@ -353,6 +416,10 @@ pub fn merge_ticks(parts: &[Tick]) -> Tick {
             }
         }
         for s in &p.scenarios {
+            sc_hists
+                .entry(s.id.clone())
+                .or_default()
+                .push((s.n, s.hist.as_deref()));
             match scenarios.get_mut(&s.id) {
                 None => {
                     scenarios.insert(s.id.clone(), s.clone());
@@ -367,6 +434,27 @@ pub fn merge_ticks(parts: &[Tick]) -> Tick {
                     acc.dropped += s.dropped;
                 }
             }
+        }
+    }
+    for (id, acc) in &mut ops {
+        acc.hist = None;
+        if let Some(h) = merged_hist(&op_hists[id]) {
+            acc.p50 = pct(&h, 0.50);
+            acc.p90 = pct(&h, 0.90);
+            acc.p95 = pct(&h, 0.95);
+            acc.p99 = pct(&h, 0.99);
+            acc.max = max_ms(&h);
+            acc.hist = tick_hist(&h);
+        }
+    }
+    for (id, acc) in &mut scenarios {
+        acc.hist = None;
+        if let Some(h) = merged_hist(&sc_hists[id]) {
+            acc.p50 = pct(&h, 0.50);
+            acc.p95 = pct(&h, 0.95);
+            acc.p99 = pct(&h, 0.99);
+            acc.max = max_ms(&h);
+            acc.hist = tick_hist(&h);
         }
     }
     Tick {
@@ -480,7 +568,7 @@ mod tests {
         whole.tick(1);
         a.tick(1);
         b.tick(1);
-        let merged = merge_totals(&[a.finish(), b.finish()]);
+        let merged = merge_totals(&[a.finish(), b.finish()]).unwrap();
         let one = whole.finish();
         assert_eq!(merged.ops[OP].hist, one.ops[OP].hist);
         assert_eq!(merged.scenarios[SC].hist, one.scenarios[SC].hist);
@@ -599,6 +687,7 @@ mod tests {
                 bytes_in: 10,
                 bytes_out: 5,
                 lag,
+                hist: None,
             }],
             scenarios: vec![ScenarioTick {
                 id: SC.into(),
@@ -609,6 +698,7 @@ mod tests {
                 p95: p50,
                 p99: p50,
                 max,
+                hist: None,
             }],
         };
         let m = merge_ticks(&[mk(100, 10.0, 50.0, Some(3)), mk(300, 20.0, 40.0, None)]);
@@ -622,7 +712,148 @@ mod tests {
         assert_eq!(op.max, 50.0);
         assert!((op.p50 - 17.5).abs() < 1e-9, "взвешенное по n: {}", op.p50);
         assert_eq!(op.lag, Some(3));
+        assert_eq!(
+            op.hist, None,
+            "без гистограмм — приближение и пустой `hist`"
+        );
         assert_eq!(m.scenarios[0].n, 400);
+        assert_eq!(m.scenarios[0].hist, None);
         assert_eq!(merge_ticks(&[]).t, 0);
+    }
+
+    /// Два агента с непересекающимися задержками в одной секунде и один агент со всеми.
+    fn split_seconds() -> (Tick, Tick, Tick) {
+        let mut whole = Recorder::new();
+        let mut a = Recorder::new();
+        let mut b = Recorder::new();
+        // Агент `a` — быстрые ответы (1–2 мс), агент `b` — медленные (100–300 мс).
+        for i in 0..1000u64 {
+            let l = 1_000 + i;
+            whole.record(sample(l, None));
+            whole.iteration(SC, l, None);
+            a.record(sample(l, None));
+            a.iteration(SC, l, None);
+        }
+        for i in 0..100u64 {
+            let l = 100_000 + i * 2_000;
+            whole.record(sample(l, None));
+            whole.iteration(SC, l, None);
+            b.record(sample(l, None));
+            b.iteration(SC, l, None);
+        }
+        (whole.tick(3), a.tick(3), b.tick(3))
+    }
+
+    #[test]
+    fn tick_carries_the_histogram_of_the_second() {
+        let (whole, a, _) = split_seconds();
+        let h = decode_hist(whole.ops[0].hist.as_deref().unwrap()).unwrap();
+        assert_eq!(h.len(), 1100);
+        let h = decode_hist(a.scenarios[0].hist.as_deref().unwrap()).unwrap();
+        assert_eq!(h.len(), 1000);
+        // Секунда без замеров гистограмму не несёт.
+        let mut r = Recorder::new();
+        r.dropped(SC, &[OP.to_string()]);
+        let t = r.tick(1);
+        assert_eq!(
+            (t.ops[0].hist.as_deref(), t.scenarios[0].hist.as_deref()),
+            (None, None)
+        );
+        assert!(decode_hist("not base64!").is_err());
+        assert!(decode_hist("AAAA").is_err());
+    }
+
+    #[test]
+    fn merge_ticks_takes_percentiles_from_merged_histograms() {
+        let (whole, a, b) = split_seconds();
+        let m = merge_ticks(&[a.clone(), b.clone()]);
+        let (op, one) = (&m.ops[0], &whole.ops[0]);
+        assert_eq!(
+            (op.p50, op.p90, op.p95, op.p99, op.max),
+            (one.p50, one.p90, one.p95, one.p99, one.max)
+        );
+        assert_eq!(op.n, 1100);
+        let (sc, one) = (&m.scenarios[0], &whole.scenarios[0]);
+        assert_eq!(
+            (sc.p50, sc.p95, sc.p99, sc.max),
+            (one.p50, one.p95, one.p99, one.max)
+        );
+        // Слитая гистограмма уходит дальше и содержит все замеры секунды.
+        let h = decode_hist(op.hist.as_deref().unwrap()).unwrap();
+        assert_eq!(h.len(), op.n);
+        let h = decode_hist(sc.hist.as_deref().unwrap()).unwrap();
+        assert_eq!(h.len(), sc.n);
+        // Взвешенное среднее здесь заметно врёт: p99 медленного агента размылся бы до ~30 мс.
+        assert!(op.p99 > 250.0, "{}", op.p99);
+        // Часть без замеров не мешает точному пути.
+        let mut idle = a.clone();
+        for o in &mut idle.ops {
+            (o.n, o.hist) = (0, None);
+        }
+        for s in &mut idle.scenarios {
+            (s.n, s.hist) = (0, None);
+        }
+        let m2 = merge_ticks(&[a, b, idle]);
+        assert_eq!(m2.ops[0].p99, m.ops[0].p99);
+        assert!(m2.ops[0].hist.is_some());
+    }
+
+    #[test]
+    fn merge_ticks_falls_back_to_weighted_without_a_histogram() {
+        let (_, a, b) = split_seconds();
+        let weighted_p50 =
+            |x: f64, nx: u64, y: f64, ny: u64| (x * nx as f64 + y * ny as f64) / (nx + ny) as f64;
+        let mut old = b.clone();
+        old.ops[0].hist = None;
+        old.scenarios[0].hist = Some("garbage".into());
+        let m = merge_ticks(&[a.clone(), old]);
+        let op = &m.ops[0];
+        assert_eq!(op.hist, None);
+        assert_eq!(op.n, 1100);
+        assert!(
+            (op.p50 - weighted_p50(a.ops[0].p50, 1000, b.ops[0].p50, 100)).abs() < 1e-9,
+            "{}",
+            op.p50
+        );
+        assert_eq!(op.max, a.ops[0].max.max(b.ops[0].max));
+        let sc = &m.scenarios[0];
+        assert_eq!(sc.hist, None, "неразборчивый `hist` — тоже приближение");
+        assert!(
+            (sc.p99 - weighted_p50(a.scenarios[0].p99, 1000, b.scenarios[0].p99, 100)).abs() < 1e-9
+        );
+    }
+
+    #[test]
+    fn merge_totals_reports_histograms_it_cannot_add() {
+        let mut wide = Histogram::<u64>::new_with_bounds(1, 3_600_000_000, 3).unwrap();
+        wide.record(1_000_000_000).unwrap();
+        let bad = Totals {
+            ops: BTreeMap::from([(
+                OP.to_string(),
+                OpTotals {
+                    hist: wide.clone(),
+                    n: 1,
+                    ..Default::default()
+                },
+            )]),
+            scenarios: BTreeMap::new(),
+            seconds: 1,
+        };
+        let e = merge_totals(&[Totals::default(), bad]).unwrap_err();
+        assert!(e.contains(OP) && e.starts_with("operation"), "{e}");
+        let bad = Totals {
+            ops: BTreeMap::new(),
+            scenarios: BTreeMap::from([(
+                SC.to_string(),
+                ScTotals {
+                    hist: wide,
+                    n: 1,
+                    ..Default::default()
+                },
+            )]),
+            seconds: 1,
+        };
+        let e = merge_totals(&[bad]).unwrap_err();
+        assert!(e.contains(SC) && e.starts_with("scenario"), "{e}");
     }
 }

@@ -5,7 +5,12 @@ use glafira_load_model::suite::{Expect, Matcher, SchemaExpect, StatusExpect};
 use serde_json::Value;
 use serde_json_path::JsonPath;
 
-use crate::errors::{StepCode, StepError};
+use crate::errors::{MAX_IN_MESSAGE, StepCode, StepError, truncate};
+
+/// Значение для текста ошибки: тело ответа может быть сколь угодно длинным.
+fn shown(v: impl std::fmt::Display) -> String {
+    truncate(&v.to_string(), MAX_IN_MESSAGE)
+}
 
 fn status_matches(expect: &StatusExpect, status: u16) -> bool {
     match expect {
@@ -107,7 +112,7 @@ fn check_node(schema: &SchemaSummary, value: &Value, path: &str, out: &mut Vec<S
 fn jsonpath_error(path: &str, message: impl Into<String>) -> StepError {
     StepError::new(
         StepCode::ExpectJsonpath,
-        format!("{path}: {}", message.into()),
+        format!("{}: {}", shown(path), message.into()),
     )
 }
 
@@ -125,18 +130,25 @@ fn check_matcher(path: &str, matcher: &Matcher, body: &Value) -> Result<(), Step
         Matcher::Equals { equals } => {
             let v = first.ok_or_else(|| jsonpath_error(path, "no value"))?;
             if v != equals {
-                return Err(jsonpath_error(path, format!("expected {equals}, got {v}")));
+                return Err(jsonpath_error(
+                    path,
+                    format!("expected {}, got {}", shown(equals), shown(v)),
+                ));
             }
         }
         Matcher::Matches { matches } => {
             let v = first.ok_or_else(|| jsonpath_error(path, "no value"))?;
-            let re = regex::Regex::new(matches)
-                .map_err(|e| jsonpath_error(path, format!("bad regex `{matches}`: {e}")))?;
+            let re = regex::Regex::new(matches).map_err(|e| {
+                jsonpath_error(
+                    path,
+                    format!("bad regex `{}`: {}", shown(matches), shown(e)),
+                )
+            })?;
             let text = text_of(v);
             if !re.is_match(&text) {
                 return Err(jsonpath_error(
                     path,
-                    format!("`{text}` does not match /{matches}/"),
+                    format!("`{}` does not match /{}/", shown(&text), shown(matches)),
                 ));
             }
         }
@@ -144,7 +156,7 @@ fn check_matcher(path: &str, matcher: &Matcher, body: &Value) -> Result<(), Step
             let v = first.ok_or_else(|| jsonpath_error(path, "no value"))?;
             let n = v
                 .as_f64()
-                .ok_or_else(|| jsonpath_error(path, format!("{v} is not a number")))?;
+                .ok_or_else(|| jsonpath_error(path, format!("{} is not a number", shown(v))))?;
             if n <= *gt {
                 return Err(jsonpath_error(path, format!("{n} is not > {gt}")));
             }
@@ -153,7 +165,7 @@ fn check_matcher(path: &str, matcher: &Matcher, body: &Value) -> Result<(), Step
             let v = first.ok_or_else(|| jsonpath_error(path, "no value"))?;
             let n = v
                 .as_f64()
-                .ok_or_else(|| jsonpath_error(path, format!("{v} is not a number")))?;
+                .ok_or_else(|| jsonpath_error(path, format!("{} is not a number", shown(v))))?;
             if n >= *lt {
                 return Err(jsonpath_error(path, format!("{n} is not < {lt}")));
             }
@@ -405,6 +417,47 @@ mod tests {
         assert_eq!(
             (e.code, e.message.as_str()),
             (StepCode::ExpectJsonpath, "$.id: no JSON body")
+        );
+    }
+
+    #[test]
+    fn long_response_values_are_truncated_in_messages() {
+        let long = "z".repeat(10_000);
+        let body = json!({"id": long, "n": long});
+        let run = |m: Matcher, path: &str| {
+            check_expect(&with_path(path, m), Some(200), Some(&body), 1.0, None)
+                .unwrap_err()
+                .message
+        };
+        let cases = [
+            run(
+                Matcher::Equals {
+                    equals: json!("A-1"),
+                },
+                "$.id",
+            ),
+            run(
+                Matcher::Matches {
+                    matches: "^A-".into(),
+                },
+                "$.id",
+            ),
+            run(Matcher::Gt { gt: 1.0 }, "$.n"),
+            run(Matcher::Lt { lt: 1.0 }, "$.n"),
+        ];
+        for message in cases {
+            assert!(message.len() < 300, "{} bytes", message.len());
+            assert!(message.contains(&format!("{}...", "z".repeat(MAX_IN_MESSAGE - 4))));
+        }
+        let short = run(
+            Matcher::Equals {
+                equals: json!("A-1"),
+            },
+            "$.id",
+        );
+        assert!(
+            short.starts_with("$.id: expected \"A-1\", got \"zzz"),
+            "{short}"
         );
     }
 

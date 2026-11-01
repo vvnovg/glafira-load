@@ -5,9 +5,11 @@ use std::collections::BTreeMap;
 use serde_json::Value;
 use serde_json_path::JsonPath;
 
-use crate::errors::{StepCode, StepError};
+use crate::errors::{MAX_IN_MESSAGE, StepCode, StepError, truncate};
 
 fn missing(name: &str, path: &str, why: &str) -> StepError {
+    // Каждая часть ограничена: текст ошибки уходит в события и отчёт.
+    let [name, path, why] = [name, path, why].map(|s| truncate(s, MAX_IN_MESSAGE));
     StepError::new(
         StepCode::ExtractMissing,
         format!("`{name}`: {why} at `{path}`"),
@@ -92,5 +94,17 @@ mod tests {
         )
         .unwrap_err();
         assert!(e.message.starts_with("`b`"), "{}", e.message);
+    }
+
+    #[test]
+    fn long_parts_are_truncated_in_the_message() {
+        let path = format!("$.{}", "p".repeat(5_000));
+        let e = extract_all(&map(&[("x", path.as_str())]), Some(&json!({}))).unwrap_err();
+        assert!(
+            e.message.len() < 3 * MAX_IN_MESSAGE,
+            "{} bytes",
+            e.message.len()
+        );
+        assert!(e.message.contains("p..."), "{}", e.message);
     }
 }

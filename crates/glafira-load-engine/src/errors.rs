@@ -4,6 +4,8 @@ use std::fmt;
 
 /// Предел длины запроса и ответа в примере ошибки, байт.
 pub const MAX_SAMPLE: usize = 4096;
+/// Предел длины значения из ответа или сьюта, встроенного в текст ошибки, байт.
+pub const MAX_IN_MESSAGE: usize = 200;
 /// Чем заменяется значение секрета.
 pub const MASK: &str = "***";
 
@@ -95,12 +97,41 @@ impl StepError {
     }
 }
 
-/// Заменяет каждое непустое значение секрета на `***`.
+/// Заменяет каждое непустое значение секрета на `***`. Вхождения всех секретов ищутся
+/// в исходном тексте, пересекающиеся участки сливаются и заменяются одной маской за проход:
+/// секрет, который является частью другого (`tok` и `tok123`) или перекрывает его, не оставит
+/// в тексте хвост (`***123`).
 pub fn mask(text: &str, secrets: &[String]) -> String {
-    let mut out = text.to_string();
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
     for s in secrets.iter().filter(|s| !s.is_empty()) {
-        out = out.replace(s.as_str(), MASK);
+        // Вхождения одного секрета тоже могут перекрываться (`aa` в `aaa`).
+        let mut from = 0;
+        while let Some(pos) = text[from..].find(s.as_str()) {
+            let begin = from + pos;
+            ranges.push((begin, begin + s.len()));
+            from = begin + text[begin..].chars().next().map_or(1, char::len_utf8);
+        }
     }
+    if ranges.is_empty() {
+        return text.to_string();
+    }
+    ranges.sort_unstable();
+    let mut merged: Vec<(usize, usize)> = Vec::with_capacity(ranges.len());
+    for (b, e) in ranges {
+        match merged.last_mut() {
+            // Сливаются только пересекающиеся участки; соседние остаются разными масками.
+            Some(last) if b < last.1 => last.1 = last.1.max(e),
+            _ => merged.push((b, e)),
+        }
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    for (b, e) in merged {
+        out.push_str(&text[at..b]);
+        out.push_str(MASK);
+        at = e;
+    }
+    out.push_str(&text[at..]);
     out
 }
 
@@ -164,6 +195,34 @@ mod tests {
         );
         assert!(!masked.contains("s3cr3t") && !masked.contains("p@ss"));
         assert_eq!(mask("plain", &[]), "plain");
+    }
+
+    #[test]
+    fn mask_covers_overlapping_secrets_whole() {
+        // Префикс: короткий секрет идёт первым в списке, но от длинного не остаётся хвост.
+        let secrets = vec!["tok".to_string(), "tok123".to_string()];
+        assert_eq!(mask("Bearer tok123", &secrets), "Bearer ***");
+        assert_eq!(mask("a=tok b=tok123", &secrets), "a=*** b=***");
+        // Подстрока в середине и в конце длинного секрета.
+        let secrets = vec!["123".to_string(), "tok123".to_string()];
+        assert_eq!(
+            mask("Bearer tok123; pin 123", &secrets),
+            "Bearer ***; pin ***"
+        );
+        let secrets = vec!["k12".to_string(), "tok123".to_string()];
+        let masked = mask("x tok123 y", &secrets);
+        assert_eq!(masked, "x *** y");
+        assert!(!masked.contains("123") && !masked.contains("tok"));
+        // Перекрытие без вложения: оба секрета закрыты целиком одной маской.
+        let secrets = vec!["ab".to_string(), "bc".to_string()];
+        assert_eq!(mask("xabcx", &secrets), "x***x");
+        // Соседние секреты остаются отдельными масками.
+        assert_eq!(mask("abbc", &secrets), "******");
+        assert_eq!(mask("aaa", &["aa".to_string()]), "***");
+        // Пустое значение пропускается и не ломает замену.
+        let secrets = vec![String::new(), "tok".to_string()];
+        assert_eq!(mask("tok", &secrets), "***");
+        assert_eq!(mask("abc", &[String::new()]), "abc");
     }
 
     #[test]
