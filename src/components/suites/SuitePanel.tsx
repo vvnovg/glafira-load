@@ -1,5 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../../api/client";
 import { joinProjectPath } from "../../lib/paths";
@@ -15,9 +16,32 @@ export function SuitePanel({ path, name }: { path: string; name: string }) {
   const { t } = useTranslation();
   const [creating, setCreating] = useState(false);
   // Файл меняют снаружи: при возврате фокуса в окно и по кнопке «Проверить» оба запроса перечитывают диск
-  // (глобально во `App` перезапрос по фокусу выключен — здесь он нужен).
+  // (глобально во `App` перезапрос по фокусу выключен — здесь он нужен). `refetchOnWindowFocus` TanStack Query
+  // срабатывает только на `visibilitychange`, а окно Tauri его не шлёт при переходе в редактор и обратно
+  // (лишь при сворачивании) — поэтому ещё и подписка на фокус окна Tauri ниже.
   const view = useQuery({ queryKey: ["suite", path, name], queryFn: () => api.suiteGet(path, name), refetchOnWindowFocus: true });
   const check = useQuery({ queryKey: ["suiteCheck", path, name], queryFn: () => api.suiteCheck(path, name), refetchOnWindowFocus: true });
+  const { refetch: refetchView } = view;
+  const { refetch: refetchCheck } = check;
+  useEffect(() => {
+    let unlisten: Promise<(() => void) | null>;
+    try {
+      unlisten = getCurrentWindow()
+        .onFocusChanged(({ payload: focused }) => {
+          if (focused) {
+            void refetchView();
+            void refetchCheck();
+          }
+        })
+        .catch(() => null);
+    } catch {
+      // Вне Tauri (предпросмотр в браузере, тесты без мока) окна нет — остаётся перезапрос по `visibilitychange`.
+      unlisten = Promise.resolve(null);
+    }
+    return () => {
+      void unlisten.then((f) => f?.());
+    };
+  }, [refetchView, refetchCheck]);
   const openFile = useMutation({ mutationFn: (file: string) => api.openPath(path, joinProjectPath(path, file)) });
   const recheck = () => {
     void view.refetch();

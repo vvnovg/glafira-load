@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { renderWithClient } from "../../test/render";
@@ -15,6 +15,22 @@ const api = vi.hoisted(() => ({
   openPath: vi.fn(async () => undefined),
 }));
 vi.mock("../../api/client", () => ({ api, toAppError: (e: unknown) => e }));
+// Фокус окна Tauri: обработчик `onFocusChanged` сохраняется, чтобы тест мог «вернуть» фокус.
+const win = vi.hoisted(() => ({
+  handler: null as ((e: { payload: boolean }) => void) | null,
+  unlisten: vi.fn(),
+}));
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({
+    onFocusChanged: vi.fn(async (h: (e: { payload: boolean }) => void) => {
+      win.handler = h;
+      return () => {
+        win.handler = null;
+        win.unlisten();
+      };
+    }),
+  }),
+}));
 
 describe("SuitePanel", () => {
   beforeEach(() => {
@@ -61,6 +77,28 @@ describe("SuitePanel", () => {
     window.dispatchEvent(new Event("visibilitychange"));
     expect(await screen.findByText("order-flow-2")).toBeInTheDocument();
     await waitFor(() => expect(api.suiteCheck).toHaveBeenCalledTimes(2));
+  });
+
+  it("re-reads the file when the Tauri window regains focus and unsubscribes on unmount", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } });
+    const { unmount } = render(
+      <QueryClientProvider client={client}>
+        <SuitePanel path="/p" name="orders" />
+      </QueryClientProvider>,
+    );
+    await screen.findByText("operation http:orders:POST /v1/orders is not in the registry");
+    await waitFor(() => expect(win.handler).not.toBeNull());
+    expect(api.suiteGet).toHaveBeenCalledTimes(1);
+    api.suiteGet.mockImplementation(async () => ({ ...suiteView(), suite: { ...suiteView().suite!, scenarios: [{ ...suiteView().suite!.scenarios[0], id: "order-flow-3" }] } }));
+    // Уход из окна (в редактор) ничего не перечитывает.
+    act(() => win.handler?.({ payload: false }));
+    expect(api.suiteGet).toHaveBeenCalledTimes(1);
+    // Возврат фокуса — без `visibilitychange`, как в окне Tauri.
+    act(() => win.handler?.({ payload: true }));
+    expect(await screen.findByText("order-flow-3")).toBeInTheDocument();
+    await waitFor(() => expect(api.suiteCheck).toHaveBeenCalledTimes(2));
+    unmount();
+    await waitFor(() => expect(win.unlisten).toHaveBeenCalledTimes(1));
   });
 
   it("falls back to the findings of suite_get and explains the missing coverage", async () => {
