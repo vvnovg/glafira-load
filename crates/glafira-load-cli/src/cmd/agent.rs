@@ -1,4 +1,4 @@
-//! `glafira-load agent`: адрес, токен, папка работы, запуск сервера до Ctrl+C (спека §4.1).
+//! `glafira-load agent`: адрес, токен, папка работы, запуск сервера до Ctrl+C или SIGTERM (спека §4.1).
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -100,18 +100,35 @@ pub async fn agent(args: AgentArgs) -> Exit {
         state.work_dir.display(),
         state.secrets_env.len()
     );
-    // Ctrl+C: текущий прогон останавливается, чтобы его SSE закончился `done` и мягкое завершение
+    // Ctrl+C (SIGINT) и SIGTERM (systemd, launchd `bootout`): текущий прогон останавливается, чтобы его SSE закончился `done` и мягкое завершение
     // сервера не ждало конца профиля; сервер закрывается, когда прогон ушёл в историю с файлами.
     let on_shutdown = state.clone();
     let shutdown = async move {
-        let _ = tokio::signal::ctrl_c().await;
-        tracing::info!("shutting down");
+        let signal = shutdown_signal().await;
+        tracing::info!("{signal} received, shutting down");
         on_shutdown.shutdown().await;
     };
     if let Err(e) = server::serve(listener, state, shutdown).await {
         return startup_error(&format!("server: {e}"));
     }
     Exit(OK)
+}
+
+/// Ждёт Ctrl+C (SIGINT) или, на unix, SIGTERM; возвращает имя пришедшего сигнала. Если обработчик SIGTERM
+/// поставить не удалось, остаётся один Ctrl+C.
+async fn shutdown_signal() -> &'static str {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        if let Ok(mut term) = signal(SignalKind::terminate()) {
+            return tokio::select! {
+                _ = tokio::signal::ctrl_c() => "SIGINT",
+                _ = term.recv() => "SIGTERM",
+            };
+        }
+    }
+    let _ = tokio::signal::ctrl_c().await;
+    "Ctrl+C"
 }
 
 #[cfg(test)]

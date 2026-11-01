@@ -566,3 +566,56 @@ async fn shutdown_waits_until_the_run_has_its_files() {
         .await
         .unwrap();
 }
+
+/// SIGTERM (systemd, `launchctl bootout`) завершает агент так же мягко, как Ctrl+C: код 0, а не смерть от сигнала.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn sigterm_shuts_the_agent_down_gracefully() {
+    let port = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+    let work = tempfile::tempdir().unwrap();
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_glafira-load"))
+        .args(["agent", "--listen", &format!("127.0.0.1:{port}"), "--work"])
+        .arg(work.path())
+        .env("GLAFIRA_LOAD_AGENT_TOKEN", TOKEN)
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    // агент поднялся, когда отвечает на /v1/info: обработчик сигнала уже стоит
+    let client = Client::new();
+    let mut up = false;
+    for _ in 0..100 {
+        if let Ok(r) = client
+            .get(format!("http://127.0.0.1:{port}/v1/info"))
+            .bearer_auth(TOKEN)
+            .send()
+            .await
+            && r.status() == StatusCode::OK
+        {
+            up = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(up, "the agent did not start");
+    let kill = std::process::Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(kill.success());
+    let mut status = None;
+    for _ in 0..100 {
+        if let Some(s) = child.try_wait().unwrap() {
+            status = Some(s);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let Some(status) = status else {
+        let _ = child.kill();
+        panic!("the agent did not exit after SIGTERM");
+    };
+    assert_eq!(status.code(), Some(0), "{status:?}");
+}
