@@ -1,4 +1,4 @@
-import { act, screen } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { renderWithClient } from "../test/render";
@@ -18,6 +18,14 @@ vi.mock("../api/client", () => ({
   },
   toAppError: (e: unknown) => e,
   isAppError: () => false,
+}));
+// Запрос закрытия окна во время прогона приходит событием Tauri.
+const events = vi.hoisted(() => ({ handlers: new Map<string, () => void>() }));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(async (name: string, h: () => void) => {
+    events.handlers.set(name, h);
+    return () => events.handlers.delete(name);
+  }),
 }));
 
 describe("Layout", () => {
@@ -41,5 +49,14 @@ describe("Layout", () => {
     expect(await screen.findByRole("tab", { name: "orders-load · orders" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "orders-load · Прогон" })).toBeInTheDocument();
     expect(await screen.findByRole("heading", { name: "Прогон" })).toBeInTheDocument();
+  });
+
+  it("asks what to do with the run when the window is closed, even without the run tab", async () => {
+    renderWithClient(<Layout />);
+    await waitFor(() => expect(events.handlers.has("run-close-requested")).toBe(true));
+    act(() => events.handlers.get("run-close-requested")?.());
+    expect(screen.getByRole("alertdialog", { name: "Прогон идёт" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Отмена" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 });

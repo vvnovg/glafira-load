@@ -194,6 +194,10 @@
     "suite": {
       "title": "The suite is a YAML file you edit by hand; this tab shows and checks it and compares it with the profile. Edits on disk are picked up by «Check» and when the window regains focus.",
       "coverage": "Planned RPS = Σ over scenarios of scenario rate × steps with the operation. A delta over 10 % of the target is highlighted; active operations without steps are not covered."
+    },
+    "run": {
+      "title": "The app is the controller: it sends the suite and a share of the profile to every agent of the stand, merges their metrics and writes a run folder in <code>runs/</code>. Leaving the tab does not interrupt the run.",
+      "maxInFlight": "Cap on concurrent iterations per agent (default from the suite). When reached, new iterations are dropped and counted — a sign the stand does not keep up."
     }
   },
   "sidebar": {
@@ -592,7 +596,114 @@
     }
   },
   "run": {
-    "title": "Run"
+    "title": "Run",
+    "suite": "Suite",
+    "profile": "Profile",
+    "env": "Environment",
+    "mode": "Mode",
+    "modes": {
+      "run": "run",
+      "smoke": "smoke"
+    },
+    "maxInFlight": "Max in flight",
+    "start": "Start",
+    "stop": "Stop",
+    "recheck": "Check again",
+    "checkFailed": "The suite has errors: fix them to start",
+    "busy": "A run is already in progress in this project",
+    "status": {
+      "idle": "not started",
+      "starting": "starting…",
+      "running": "running",
+      "stopping": "stopping…",
+      "done": "finished",
+      "failed": "failed"
+    },
+    "agents": "Agents",
+    "localAgent": "The environment has no agents: the run goes on the agent built into the app",
+    "smokeLocal": "Smoke runs inside the app: the agents of the environment are not used",
+    "agentState": {
+      "ready": "ready",
+      "running": "running",
+      "lost": "lost",
+      "done": "done",
+      "failed": "failed"
+    },
+    "phase": "Phase {{index}}: {{pct}}%",
+    "elapsed": "{{done}} of {{total}} min",
+    "progress": "Timeline progress",
+    "counters": {
+      "requests": "Requests: {{n}}",
+      "errors": "Errors: {{n}}",
+      "dropped": "Dropped: {{n}}"
+    },
+    "chart": {
+      "rps": "Total RPS",
+      "target": "target",
+      "actual": "actual",
+      "p95": "p95 by operation, ms",
+      "seconds": "seconds",
+      "pickOps": "Operations on the chart (up to {{max}})"
+    },
+    "ops": {
+      "title": "Operations",
+      "operation": "Operation",
+      "n": "per second",
+      "p95": "p95, ms",
+      "errors": "errors",
+      "dropped": "dropped"
+    },
+    "sort": "Sort by {{column}}",
+    "summary": {
+      "title": "Summary",
+      "seconds": "{{seconds}} s",
+      "openFolder": "Open folder",
+      "requests": "Requests",
+      "rpsAvg": "avg RPS",
+      "rpsPeak": "peak RPS",
+      "errPct": "errors, %",
+      "dropped": "dropped",
+      "p50": "p50, ms",
+      "p95": "p95, ms",
+      "p99": "p99, ms",
+      "max": "max, ms",
+      "target": "target RPS",
+      "achieved": "achieved, %"
+    },
+    "runStatus": {
+      "completed": "completed",
+      "stopped": "stopped",
+      "incomplete": "incomplete",
+      "failed": "failed"
+    },
+    "samples": "Recent errors",
+    "past": {
+      "title": "Past runs",
+      "started": "Started",
+      "suite": "Suite",
+      "profile": "Profile",
+      "env": "Environment",
+      "mode": "Mode",
+      "status": "Status",
+      "inProgress": "unfinished",
+      "empty": "No runs yet",
+      "noDetails": "No summary: the run has no summary.yaml"
+    },
+    "smoke": {
+      "title": "Smoke results",
+      "scenario": "Scenario",
+      "step": "Step",
+      "operation": "Operation",
+      "result": "Result",
+      "ok": "ok"
+    },
+    "close": {
+      "title": "A run is in progress",
+      "message": "Stop the run and close the window, or close it and let the agents finish on their own? The run folder will be completed when the project is opened next time.",
+      "stop": "Stop and close",
+      "leave": "Close, agents finish",
+      "stopping": "Stopping the run…"
+    }
   },
   "units": {
     "rps": "RPS",

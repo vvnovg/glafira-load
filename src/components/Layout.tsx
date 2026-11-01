@@ -4,6 +4,7 @@ import { Sidebar } from "./Sidebar";
 import { i18n } from "../i18n";
 import { TabContent } from "./TabContent";
 import { UpdateNotice } from "./about/UpdateNotice";
+import { RunCloseDialog } from "./run/RunCloseDialog";
 import { TabActiveContext } from "../lib/tabActive";
 import { useHelpShortcut } from "../lib/useHelpShortcut";
 import { baseName } from "../lib/paths";
@@ -42,6 +43,8 @@ export function Layout() {
     <div className="layout">
       <Sidebar />
       <main className="workspace">
+        {/* Диалог закрытия окна во время прогона — вне вкладок: вкладку прогона могут закрыть. */}
+        <RunCloseDialog />
         <UpdateNotice />
         <nav className="tabbar" role="tablist">
           {tabs.map((tab) => {
