@@ -1,0 +1,10 @@
+format: 1
+name: orders
+scenarios:
+  - id: order-flow
+    steps:
+      - id: get
+        http: { operation: "http:orders:GET /v1/orders/{id}", path: { id: "{{steps.create.order_id}}" } }
+      - id: create
+        http: { operation: "http:orders:POST /v1/orders", body: { customerId: "u-1" } }
+        extract: { order_id: "$.id" }

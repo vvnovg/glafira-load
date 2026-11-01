@@ -1,0 +1,8 @@
+format: 1
+name: orders
+scenarios:
+  - id: create
+    steps:
+      - http:
+          operation: "http:orders:POST /v1/orders"
+          body: { customerId: "{{random 1 5}}" }

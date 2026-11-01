@@ -1,0 +1,10 @@
+format: 1
+name: orders
+data:
+  users: data/users.csv
+scenarios:
+  - id: create
+    steps:
+      - http:
+          operation: "http:orders:POST /v1/orders"
+          body: { customerId: "{{users.phone}}" }

@@ -1,0 +1,13 @@
+format: 1
+name: orders
+scenarios:
+  - id: create
+    steps:
+      - http: { operation: "http:orders:POST /v1/orders", body: { customerId: "u-1" } }
+  - id: create-and-get
+    drives: "http:orders:POST /v1/orders"
+    steps:
+      - id: create
+        http: { operation: "http:orders:POST /v1/orders", body: { customerId: "u-2" } }
+        extract: { order_id: "$.id" }
+      - http: { operation: "http:orders:GET /v1/orders/{id}", path: { id: "{{steps.create.order_id}}" } }
