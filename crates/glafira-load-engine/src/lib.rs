@@ -3,6 +3,7 @@
 //! Крейт не зависит от `tauri`; пользовательские строки — английские.
 
 pub mod agent_api;
+pub mod agent_link;
 pub mod avro;
 pub mod context;
 pub mod errors;

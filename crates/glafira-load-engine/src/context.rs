@@ -122,6 +122,41 @@ pub fn parse_table(format: DataFormat, text: &str) -> Result<DataTable, String> 
     }
 }
 
+/// Разбор набора данных из памяти (бандл агента): формат — по расширению `file_name`
+/// (путь из `suite.data[*].path`), содержимое — UTF-8.
+pub fn parse_data(file_name: &str, bytes: &[u8]) -> Result<DataTable, String> {
+    let format = DataFormat::from_path(file_name)?;
+    let text =
+        std::str::from_utf8(bytes).map_err(|e| format!("`{file_name}` is not UTF-8: {e}"))?;
+    parse_table(format, text)
+}
+
+/// Колонки и число строк файла данных для `suite::check`: CSV с заголовком или JSON Lines
+/// (колонки — объединение ключей всех строк, по алфавиту). `None` — файла нет или он не читается.
+/// `path` — относительно `root`, как в `suite.data[*].path`.
+pub fn data_info(root: &Path, path: &str) -> Option<glafira_load_model::suite::check::DataInfo> {
+    let text = std::fs::read_to_string(root.join(path)).ok()?;
+    if path.to_ascii_lowercase().ends_with(".jsonl") {
+        let mut columns = std::collections::BTreeSet::new();
+        let mut rows = 0;
+        for line in text.lines().filter(|l| !l.trim().is_empty()) {
+            let value: serde_json::Value = serde_json::from_str(line).ok()?;
+            if let Some(object) = value.as_object() {
+                columns.extend(object.keys().cloned());
+            }
+            rows += 1;
+        }
+        return Some(glafira_load_model::suite::check::DataInfo {
+            columns: columns.into_iter().collect(),
+            rows,
+        });
+    }
+    let mut reader = csv::Reader::from_reader(text.as_bytes());
+    let columns = reader.headers().ok()?.iter().map(str::to_string).collect();
+    let rows = reader.records().filter(|r| r.is_ok()).count();
+    Some(glafira_load_model::suite::check::DataInfo { columns, rows })
+}
+
 /// Путь внутри проекта: относительный, без `..`.
 pub fn is_inside_project(path: &str) -> bool {
     let p = Path::new(path);
@@ -422,5 +457,58 @@ mod tests {
         assert_eq!(ctx.data("empty", "id"), None);
         assert_eq!(ctx.pick("empty", "id"), None);
         assert_eq!(ctx.data("users", "id"), Some(Value::String("1".into())));
+    }
+
+    #[test]
+    fn parse_data_picks_format_by_extension() {
+        let csv = parse_data("data/users.csv", b"id,name\n1,Ann\n").unwrap();
+        assert_eq!(
+            (csv.columns.as_slice(), csv.rows.len()),
+            (["id".to_string(), "name".to_string()].as_slice(), 1)
+        );
+        let jsonl = parse_data("data/skus.jsonl", b"{\"sku\": \"A\", \"price\": 10}\n").unwrap();
+        // Порядок колонок JSON Lines зависит от `preserve_order` у serde_json (объединение
+        // features в workspace), поэтому значения сверяются по именам колонок.
+        assert_eq!(
+            (jsonl.value(0, "sku"), jsonl.value(0, "price")),
+            (Some(&serde_json::json!("A")), Some(&serde_json::json!(10)))
+        );
+        assert!(
+            parse_data("data/x.txt", b"")
+                .unwrap_err()
+                .contains("unsupported data file")
+        );
+        assert!(
+            parse_data("data/x.csv", &[0xff, 0xfe])
+                .unwrap_err()
+                .contains("not UTF-8")
+        );
+    }
+
+    #[test]
+    fn data_info_reads_csv_and_jsonl_columns_and_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("data")).unwrap();
+        std::fs::write(
+            dir.path().join("data/users.csv"),
+            "id,name\n1,\"a, b\"\n2,c\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("data/skus.jsonl"),
+            "{\"sku\":\"x\",\"qty\":1}\n\n{\"sku\":\"y\"}\n",
+        )
+        .unwrap();
+        let users = data_info(dir.path(), "data/users.csv").unwrap();
+        assert_eq!(
+            (users.columns, users.rows),
+            (vec!["id".to_string(), "name".to_string()], 2)
+        );
+        let skus = data_info(dir.path(), "data/skus.jsonl").unwrap();
+        assert_eq!(
+            (skus.columns, skus.rows),
+            (vec!["qty".to_string(), "sku".to_string()], 2)
+        );
+        assert!(data_info(dir.path(), "data/none.csv").is_none());
     }
 }
