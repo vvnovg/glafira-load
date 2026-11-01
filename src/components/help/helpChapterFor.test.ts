@@ -9,6 +9,8 @@ const cases: [TabSpec | null, string][] = [
   [{ kind: "registry", path: "/p" }, "registry"],
   [{ kind: "prod-load", path: "/p" }, "prod-load"],
   [{ kind: "profile", path: "/p" }, "profile"],
+  [{ kind: "suite", path: "/p", name: "orders" }, "suites"],
+  [{ kind: "run", path: "/p" }, "run"],
   [{ kind: "about" }, "updates"],
   [{ kind: "settings" }, "getting-started"],
   [{ kind: "help", chapter: "registry" }, "getting-started"],

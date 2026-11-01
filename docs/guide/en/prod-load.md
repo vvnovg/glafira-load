@@ -27,7 +27,7 @@ edits. Fill in the columns F–L:
 
 For `kafka_consume` rows the figures mean something else: F and G are messages per second, I is the message size, and K
 is the allowed consumer lag in seconds. Excel checks the numbers as you type them; the column headers have notes with these rules.
-In version 0.1.0 column J is not locked for Kafka rows: leave it empty, because a value you enter there is imported as
+In versions 0.1.0 and 0.2.0 column J is not locked for Kafka rows: leave it empty, because a value you enter there is imported as
 is.
 
 **Parameters** holds a marker of the project in cell A1 (do not change it) and the fields about the figures: the

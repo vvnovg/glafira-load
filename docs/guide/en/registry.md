@@ -55,7 +55,7 @@ Every scan writes a snapshot to `registry/scans/`. Turn on [[ui:registry.diffTog
 between the last two snapshots: new, changed or removed. In the scans section under the table, choose any two snapshots
 with [[ui:registry.diffFrom]] and [[ui:registry.diffTo]]. Turning the diff on sets the status filter to any status, so
 removed operations and their marks are visible. The snapshot also records which fields changed (added, removed, changed
-type or required); [[ui:service.openScan]] in the scan report on the service tab opens it. In version 0.1.0 these
+type or required); [[ui:service.openScan]] in the scan report on the service tab opens it. In versions 0.1.0 and 0.2.0 these
 per-field changes are only in the snapshots: the registry table marks the rows but does not list the fields.
 
 ## Manual operations {#manual}

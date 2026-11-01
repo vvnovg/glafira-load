@@ -1,5 +1,5 @@
 /** Главы руководства (спец. §16); каждый этап добавляет свои. Тот же список — в `scripts/i18n-check.mjs`. */
-export const GUIDE_CHAPTERS = ["getting-started", "project", "registry", "prod-load", "profile", "updates"] as const;
+export const GUIDE_CHAPTERS = ["getting-started", "project", "registry", "prod-load", "profile", "suites", "agents", "run", "updates"] as const;
 
 export type ChapterId = (typeof GUIDE_CHAPTERS)[number];
 

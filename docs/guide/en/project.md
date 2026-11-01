@@ -15,7 +15,7 @@ an existing repository or initialize one yourself. The folder holds:
 - `load/prod-load.yaml` — the production-load figures ([Production load](prod-load.md));
 - `load/imports/<date-time>.xlsx` — a copy of every imported template;
 - `load/profile.yaml` — coefficients and load profiles ([Load profile](profile.md));
-- `.gitignore` with `runs/` — run results of the next stages stay out of git.
+- `.gitignore` with `runs/` — the run folders ([Run](run.md#files)) stay out of git.
 
 Commit all of these files: they are plain YAML, sorted so that `git diff` shows only real changes. Every file is
 written atomically: a crash cannot leave half a file. The list of open projects is kept in the app settings, not in the
@@ -70,9 +70,10 @@ service, the reports of the other services are kept. One scan runs in a project 
 A stand is a test environment where the load will run: an [[ui:project.envId]], a [[ui:project.envKind]] (`dev`, `test`,
 `stage` or `prod`) and addresses: [[ui:project.env.http]], [[ui:project.env.kafka]],
 [[ui:project.env.grpc]] and [[ui:project.env.sql]]. The kind is shown as a badge next to its selector, and `prod` is
-red so that a production stand is not mistaken for a test one; in version 0.1.0 the badge is shown only on the project
-tab. Write addresses without passwords: the manifest is committed to git.
-Secrets come with the runner in stage L2; in this version stands are only described.
+red so that a production stand is not mistaken for a test one; the badge is shown on the project tab. Write addresses
+without passwords: the manifest is committed to git. Secrets are not written here either: a suite refers to them by
+name, and the values live on the agents ([Agents and stands](agents.md#secrets)). The agents of the stand and the
+Schema Registry address are described in [Agents and stands](agents.md#stand).
 
 ## Manifest problems {#problems}
 

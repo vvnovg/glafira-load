@@ -30,7 +30,9 @@ Open [[ui:sidebar.about]] at the bottom of the left panel. The screen shows a sh
 - [[ui:about.dataDir]] — the folder with the settings of the app.
 - [[ui:about.logDir]] — the folder with log files.
 
-The [[ui:about.updates.title]] section is on the same screen.
+The [[ui:about.agent.title]] section shows the command that downloads the load agent for the operating system and
+processor of this machine ([Installing an agent](agents.md#install)). The [[ui:about.updates.title]] section is on the
+same screen.
 
 ## Support the project {#support}
 

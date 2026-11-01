@@ -13,6 +13,10 @@ export function helpChapterFor(tab: TabSpec | null): ChapterId {
       return "prod-load";
     case "profile":
       return "profile";
+    case "suite":
+      return "suites";
+    case "run":
+      return "run";
     case "about":
       return "updates";
     default:

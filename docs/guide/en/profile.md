@@ -1,7 +1,7 @@
 # Load profile
 
 The load profile turns the production figures into targets for the test stand: how many requests per second each
-operation gets and how the load changes over time. It is kept in `load/profile.yaml`; the runner of the next stage
+operation gets and how the load changes over time. It is kept in `load/profile.yaml`; a run ([Run](run.md))
 executes it as is. Open the tab with [[ui:sidebar.profile]] in the left panel.
 
 ## Coefficients {#coefficients}

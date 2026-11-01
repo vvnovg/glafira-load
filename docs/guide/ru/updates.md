@@ -29,7 +29,8 @@ https://github.com/vvnovg/glafira-load-releases/releases
 - [[ui:about.dataDir]] — папка с настройками приложения.
 - [[ui:about.logDir]] — папка с файлами логов.
 
-Здесь же — раздел [[ui:about.updates.title]].
+Раздел [[ui:about.agent.title]] показывает команду, которая скачивает агента нагрузки для операционной системы и
+процессора этой машины ([Установка агента](agents.md#install)). Здесь же — раздел [[ui:about.updates.title]].
 
 ## Поддержать проект {#support}
 

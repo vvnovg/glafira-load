@@ -1,12 +1,14 @@
 # Getting started
 
-Glafira for Load Testing is a desktop tool for preparing and maintaining load tests. This version (stage L1) builds the
-registry of operations from the contracts of your services, exports the production-load template to Excel, imports the
-filled template and computes the load profile. The CLI runner, suites, mocks and reports come in the next stages.
+Glafira for Load Testing is a desktop tool for preparing and maintaining load tests. It builds the registry of
+operations from the contracts of your services, imports the production figures and computes the load profile, and from
+version 0.2.0 runs the load: suites, the `glafira-load` CLI with agents on the load machines and the run window. Mocks
+and reports in the app come in the next stages.
 
 Everything Glafira produces is kept in the project folder as plain YAML files that you commit to git next to your
-tests. The app reads the clones of your services but never changes them. It sends nothing over the network except the
-update check, and your organization can turn that off with a policy.
+tests. The app reads the clones of your services but never changes them. Over the network it talks only to the agents
+of your stands and, for a smoke or a stand without agents, to the services of the stand, plus the update check, which
+your organization can turn off with a policy.
 
 ## Installation {#install}
 
@@ -30,7 +32,8 @@ figures and the load profile. The services under test are local git clones somew
 
 An existing project is opened with [[ui:sidebar.openProject]]. Next steps: export the production-load template
 ([Production load](prod-load.md)) and compute the load profile ([Load profile](profile.md)). More about the project
-folder in [Project and services](project.md).
+folder in [Project and services](project.md). Then write a suite ([Suites](suites.md)), set up the agents of the stand
+([Agents and stands](agents.md)) and start a run ([Run](run.md)).
 
 ## Interface language {#language}
 
