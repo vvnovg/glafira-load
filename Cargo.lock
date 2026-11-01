@@ -1741,6 +1741,7 @@ dependencies = [
  "base64 0.22.1",
  "csv",
  "form_urlencoded",
+ "futures",
  "glafira-load-model",
  "hdrhistogram",
  "percent-encoding",
@@ -1751,12 +1752,16 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_json_path",
+ "tar",
  "tempfile",
  "testcontainers",
  "thiserror 2.0.21",
+ "time",
  "tokio",
+ "tokio-stream",
  "tokio-util",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
