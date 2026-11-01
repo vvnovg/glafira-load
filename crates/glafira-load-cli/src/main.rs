@@ -44,7 +44,7 @@ enum Command {
         #[arg(long)]
         out: Option<PathBuf>,
     },
-    /// Run a load profile locally (exit 2 when stopped with Ctrl+C)
+    /// Run a load profile locally or on the environment's agents (exit 2 when stopped with Ctrl+C)
     Run {
         /// Project folder
         project: PathBuf,
@@ -56,6 +56,9 @@ enum Command {
         /// Suite name; the only suite of the project when omitted
         #[arg(long)]
         suite: Option<String>,
+        /// Run on the agents of the environment (tokens in GLAFIRA_LOAD_AGENT_TOKEN_<ID>) instead of this process
+        #[arg(long)]
+        agents: bool,
         /// Cap of concurrent iterations; overrides `defaults.max_in_flight`
         #[arg(long = "max-in-flight")]
         max_in_flight: Option<u32>,
@@ -125,6 +128,7 @@ async fn main() -> Exit {
             profile,
             env,
             suite,
+            agents,
             max_in_flight,
             out,
         } => {
@@ -134,6 +138,7 @@ async fn main() -> Exit {
                 profile,
                 env,
                 suite,
+                agents,
                 max_in_flight,
                 out,
             })
