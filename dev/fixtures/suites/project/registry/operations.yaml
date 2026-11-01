@@ -1,0 +1,318 @@
+format: 1
+operations:
+- id: http:orders:DELETE /v1/orders/{id}
+  service: orders
+  kind: http
+  name: cancelOrder
+  address:
+    type: http
+    method: DELETE
+    path: /v1/orders/{id}
+  source:
+    kind: openapi
+    path: api/openapi.yaml
+    line: 70
+  fingerprint: sha256:b029fd2627ec7ad60fafabbb06956abeef030cfd2bb1757be84329f4f884999c
+  status: removed
+  first_seen:
+    version: 1.4.0
+    commit: 9f3c2ab
+    at: 2026-10-31T10:00:00Z
+  last_seen:
+    version: 1.4.0
+    commit: 9f3c2ab
+    at: 2026-10-31T10:00:00Z
+- id: http:orders:GET /v1/health
+  service: orders
+  kind: http
+  name: health
+  address:
+    type: http
+    method: GET
+    path: /v1/health
+  source:
+    kind: openapi
+    path: api/openapi.yaml
+    line: 90
+  fingerprint: sha256:98595ec6124536e61d125bbe2bc08df2cf13d14b3b574028708317599a52eb1e
+  status: active
+  first_seen:
+    version: 1.4.0
+    commit: 9f3c2ab
+    at: 2026-10-31T10:00:00Z
+  last_seen:
+    version: 1.5.0
+    commit: c01d4e5
+    at: 2026-10-31T12:00:00Z
+- id: http:orders:GET /v1/orders
+  service: orders
+  kind: http
+  name: listOrders
+  address:
+    type: http
+    method: GET
+    path: /v1/orders
+  response:
+    name: body
+    type: array
+    children:
+    - name: items
+      type: object
+      children:
+      - name: id
+        type: string
+        required: true
+        example: ord-1001
+      - name: customerId
+        type: string
+        required: true
+      - name: status
+        type: string
+        required: true
+      - name: total
+        type: number
+      - name: items
+        type: array
+        children:
+        - name: items
+          type: object
+          children:
+          - name: sku
+            type: string
+            required: true
+          - name: qty
+            type: integer
+            required: true
+  source:
+    kind: openapi
+    path: api/openapi.yaml
+    line: 30
+  fingerprint: sha256:909eee1b5e269d901f305effb348a3169f9c945008b4d62111bc166195564f2e
+  status: active
+  first_seen:
+    version: 1.4.0
+    commit: 9f3c2ab
+    at: 2026-10-31T10:00:00Z
+  last_seen:
+    version: 1.5.0
+    commit: c01d4e5
+    at: 2026-10-31T12:00:00Z
+- id: http:orders:GET /v1/orders/{id}
+  service: orders
+  kind: http
+  name: getOrder
+  summary: Get an order by id
+  address:
+    type: http
+    method: GET
+    path: /v1/orders/{id}
+  response:
+    name: body
+    type: object
+    children:
+    - name: id
+      type: string
+      required: true
+      example: ord-1001
+    - name: customerId
+      type: string
+      required: true
+    - name: status
+      type: string
+      required: true
+    - name: total
+      type: number
+    - name: items
+      type: array
+      children:
+      - name: items
+        type: object
+        children:
+        - name: sku
+          type: string
+          required: true
+        - name: qty
+          type: integer
+          required: true
+  responses:
+    '404':
+      name: body
+      type: object
+      children:
+      - name: message
+        type: string
+        required: true
+  source:
+    kind: openapi
+    path: api/openapi.yaml
+    line: 48
+  fingerprint: sha256:ff5d1cbdabb75fd4b5c914cc12b8b13281a079e97a8d33101bd779a5c8123bb8
+  status: active
+  first_seen:
+    version: 1.4.0
+    commit: 9f3c2ab
+    at: 2026-10-31T10:00:00Z
+  last_seen:
+    version: 1.5.0
+    commit: c01d4e5
+    at: 2026-10-31T12:00:00Z
+- id: http:orders:POST /v1/orders
+  service: orders
+  kind: http
+  name: createOrder
+  summary: Create an order
+  address:
+    type: http
+    method: POST
+    path: /v1/orders
+  request:
+    name: body
+    type: object
+    children:
+    - name: customerId
+      type: string
+      required: true
+    - name: items
+      type: array
+      required: true
+      children:
+      - name: items
+        type: object
+        children:
+        - name: sku
+          type: string
+          required: true
+        - name: qty
+          type: integer
+          required: true
+  response:
+    name: body
+    type: object
+    children:
+    - name: id
+      type: string
+      required: true
+      example: ord-1001
+    - name: customerId
+      type: string
+      required: true
+    - name: status
+      type: string
+      required: true
+    - name: total
+      type: number
+    - name: items
+      type: array
+      children:
+      - name: items
+        type: object
+        children:
+        - name: sku
+          type: string
+          required: true
+        - name: qty
+          type: integer
+          required: true
+  responses:
+    '400':
+      name: body
+      type: object
+      children:
+      - name: message
+        type: string
+        required: true
+  source:
+    kind: openapi
+    path: api/openapi.yaml
+    line: 12
+  fingerprint: sha256:62d7a4c5a868c7282bfc7dbb75c871256249140468d68518ad746a1a59e5ad2b
+  status: active
+  first_seen:
+    version: 1.4.0
+    commit: 9f3c2ab
+    at: 2026-10-31T10:00:00Z
+  last_seen:
+    version: 1.5.0
+    commit: c01d4e5
+    at: 2026-10-31T12:00:00Z
+  manual:
+    tags:
+    - critical
+- id: kafka_consume:orders.created
+  service: orders
+  kind: kafka_consume
+  name: OrderCreated
+  address:
+    type: kafka
+    topic: orders.created
+  response:
+    name: OrderCreated
+    type: object
+    children:
+    - name: orderId
+      type: string
+      required: true
+    - name: total
+      type: number
+    - name: status
+      type: enum
+      required: true
+      enum:
+      - NEW
+      - PAID
+    - name: items
+      type: array
+      required: true
+      children:
+      - name: items
+        type: object
+        children:
+        - name: sku
+          type: string
+          required: true
+        - name: qty
+          type: integer
+          required: true
+  source:
+    kind: schema
+    path: schemas/orders-created.avsc
+  fingerprint: sha256:9c4ab8005484ce7bdc516fedb03940107dcd2b1a4a561b5f7fe04c0872eaae34
+  status: active
+  first_seen:
+    version: 1.4.0
+    commit: 9f3c2ab
+    at: 2026-10-31T10:00:00Z
+  last_seen:
+    version: 1.5.0
+    commit: c01d4e5
+    at: 2026-10-31T12:00:00Z
+- id: kafka_produce:orders.paid
+  service: orders
+  kind: kafka_produce
+  name: OrderPaid
+  address:
+    type: kafka
+    topic: orders.paid
+  request:
+    name: OrderPaid
+    type: object
+    children:
+    - name: orderId
+      type: string
+      required: true
+    - name: paidAt
+      type: string
+      required: true
+  source:
+    kind: schema
+    path: schemas/orders-paid.avsc
+  fingerprint: sha256:a6df9353eb6178b795c687c25df716c17cad06c4ed77a2dcaa45196cf591a29e
+  status: active
+  first_seen:
+    version: 1.4.0
+    commit: 9f3c2ab
+    at: 2026-10-31T10:00:00Z
+  last_seen:
+    version: 1.5.0
+    commit: c01d4e5
+    at: 2026-10-31T12:00:00Z

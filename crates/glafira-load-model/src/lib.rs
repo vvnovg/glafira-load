@@ -8,6 +8,7 @@ pub mod profile;
 pub mod project;
 pub mod registry;
 pub mod schema;
+pub mod suite;
 
 /// Ошибка чтения файла проекта: текст для `details` и строка, если YAML её знает.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

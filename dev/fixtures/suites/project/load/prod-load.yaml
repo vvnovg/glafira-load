@@ -1,0 +1,32 @@
+format: 1
+source:
+  stand: prod
+  period_from: '2026-10-01'
+  period_to: '2026-10-31'
+  system: Orders
+  filled_by: SRE team
+  imported_at: '2026-10-31T10:00:00Z'
+  file: load/imports/2026-10-31-100000.xlsx
+operations:
+  http:orders:GET /v1/orders:
+    avg: 50.0
+    peak: 120.0
+    p95_ms: 120.0
+  http:orders:GET /v1/orders/{id}:
+    avg: 400.0
+    peak: 900.0
+    p95_ms: 60.0
+  http:orders:POST /v1/orders:
+    avg: 100.0
+    peak: 300.0
+    error_pct: 0.2
+    req_bytes: 850
+    resp_bytes: 400
+    p95_ms: 180.0
+  kafka_consume:orders.created:
+    avg: 100.0
+    peak: 300.0
+    lag_max_s: 5.0
+  kafka_produce:orders.paid:
+    avg: 80.0
+    peak: 200.0

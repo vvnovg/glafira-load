@@ -1,0 +1,6 @@
+id,email,tier
+u-1001,alice@example.com,gold
+u-1002,bob@example.com,silver
+u-1003,carol@example.com,gold
+u-1004,dave@example.com,bronze
+u-1005,erin@example.com,silver

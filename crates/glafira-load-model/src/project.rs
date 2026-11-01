@@ -112,6 +112,20 @@ pub enum EnvKind {
     Prod,
 }
 
+fn one() -> u32 {
+    1
+}
+
+/// Агент `glafira-load agent` на машине нагрузки (спека L2 §4.2). Токен — в хранилище ОС, не здесь.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Agent {
+    pub id: String,
+    pub url: String,
+    /// Доля нагрузки относительно других агентов стенда, ≥ 1.
+    #[serde(default = "one")]
+    pub weight: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Environment {
     pub id: String,
@@ -125,6 +139,11 @@ pub struct Environment {
     /// Строка подключения без пароля; пароль — L2.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sql: Option<String>,
+    /// Schema Registry стенда: нужен шагам `kafka_produce` с `encoding: avro`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema_registry: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<Agent>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
 }
@@ -161,13 +180,42 @@ impl Manifest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ManifestProblem {
-    BadFormat { format: u32 },
+    BadFormat {
+        format: u32,
+    },
     EmptyName,
-    BadServiceId { id: String },
-    DuplicateServiceId { id: String },
-    EmptyServicePath { id: String },
-    BadEnvironmentId { id: String },
-    DuplicateEnvironmentId { id: String },
+    BadServiceId {
+        id: String,
+    },
+    DuplicateServiceId {
+        id: String,
+    },
+    EmptyServicePath {
+        id: String,
+    },
+    BadEnvironmentId {
+        id: String,
+    },
+    DuplicateEnvironmentId {
+        id: String,
+    },
+    BadAgentId {
+        env: String,
+        id: String,
+    },
+    DuplicateAgentId {
+        env: String,
+        id: String,
+    },
+    /// `url` не начинается с `http://` или `https://`.
+    BadAgentUrl {
+        env: String,
+        id: String,
+    },
+    BadAgentWeight {
+        env: String,
+        id: String,
+    },
 }
 
 /// `[a-z0-9-]{1,64}`.
@@ -204,6 +252,32 @@ pub fn validate(m: &Manifest) -> Vec<ManifestProblem> {
             out.push(ManifestProblem::DuplicateEnvironmentId { id: e.id.clone() });
         } else if !is_id(&e.id) {
             out.push(ManifestProblem::BadEnvironmentId { id: e.id.clone() });
+        }
+        let mut agents = std::collections::BTreeSet::new();
+        for a in &e.agents {
+            if !agents.insert(a.id.as_str()) {
+                out.push(ManifestProblem::DuplicateAgentId {
+                    env: e.id.clone(),
+                    id: a.id.clone(),
+                });
+            } else if !is_id(&a.id) {
+                out.push(ManifestProblem::BadAgentId {
+                    env: e.id.clone(),
+                    id: a.id.clone(),
+                });
+            }
+            if !(a.url.starts_with("http://") || a.url.starts_with("https://")) {
+                out.push(ManifestProblem::BadAgentUrl {
+                    env: e.id.clone(),
+                    id: a.id.clone(),
+                });
+            }
+            if a.weight == 0 {
+                out.push(ManifestProblem::BadAgentWeight {
+                    env: e.id.clone(),
+                    id: a.id.clone(),
+                });
+            }
         }
     }
     out
@@ -289,6 +363,8 @@ environments:
             kafka: None,
             grpc: None,
             sql: None,
+            schema_registry: None,
+            agents: vec![],
             extra: Default::default(),
         });
         m.name = "  ".into();
@@ -311,6 +387,93 @@ environments:
                 ManifestProblem::DuplicateEnvironmentId { id: "test".into() },
             ]
         );
+    }
+
+    #[test]
+    fn environment_reads_schema_registry_and_agents_and_stays_compatible() {
+        let m: Manifest = crate::from_yaml(SAMPLE).unwrap();
+        let e = &m.environments[0];
+        assert_eq!((e.schema_registry.as_deref(), e.agents.len()), (None, 0));
+        let text = crate::to_yaml(&m);
+        assert!(
+            !text.contains("schema_registry") && !text.contains("agents"),
+            "без новых полей ключи не появляются: {text}"
+        );
+        let with: Manifest = crate::from_yaml(
+            "format: 1\nname: x\nenvironments:\n  - id: test\n    kind: test\n    http: https://orders.test.local\n    schema_registry: https://sr.test.local\n    agents:\n      - { id: gen-1, url: http://10.0.1.11:7420 }\n      - { id: gen-2, url: http://10.0.1.12:7420, weight: 2 }\n    region: eu\n",
+        )
+        .unwrap();
+        let e = &with.environments[0];
+        assert_eq!(e.schema_registry.as_deref(), Some("https://sr.test.local"));
+        assert_eq!(
+            e.agents,
+            vec![
+                Agent {
+                    id: "gen-1".into(),
+                    url: "http://10.0.1.11:7420".into(),
+                    weight: 1
+                },
+                Agent {
+                    id: "gen-2".into(),
+                    url: "http://10.0.1.12:7420".into(),
+                    weight: 2
+                }
+            ]
+        );
+        assert_eq!(
+            e.extra["region"],
+            serde_json::json!("eu"),
+            "extra не ломается"
+        );
+        let again: Manifest = crate::from_yaml(&crate::to_yaml(&with)).unwrap();
+        assert_eq!(again, with);
+        assert!(validate(&with).is_empty());
+    }
+
+    #[test]
+    fn validation_checks_agents() {
+        let mut m: Manifest = crate::from_yaml(SAMPLE).unwrap();
+        let agent = |id: &str, weight: u32| Agent {
+            id: id.into(),
+            url: "http://a:7420".into(),
+            weight,
+        };
+        let mut bad_url = agent("gen-3", 1);
+        bad_url.url = "gen-3.local:7420".into();
+        m.environments[0].agents = vec![
+            agent("gen-1", 1),
+            agent("gen-1", 2),
+            agent("Gen 2", 0),
+            bad_url,
+        ];
+        assert_eq!(
+            validate(&m),
+            vec![
+                ManifestProblem::DuplicateAgentId {
+                    env: "test".into(),
+                    id: "gen-1".into()
+                },
+                ManifestProblem::BadAgentId {
+                    env: "test".into(),
+                    id: "Gen 2".into()
+                },
+                ManifestProblem::BadAgentWeight {
+                    env: "test".into(),
+                    id: "Gen 2".into()
+                },
+                ManifestProblem::BadAgentUrl {
+                    env: "test".into(),
+                    id: "gen-3".into()
+                },
+            ]
+        );
+        let mut https = m.clone();
+        https.environments[0].agents = vec![Agent {
+            id: "gen-1".into(),
+            url: "https://gen-1.local:7420/".into(),
+            weight: 1,
+        }];
+        assert!(validate(&https).is_empty(), "https:// тоже допустим");
     }
 
     #[test]

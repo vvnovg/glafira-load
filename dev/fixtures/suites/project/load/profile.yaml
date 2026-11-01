@@ -1,0 +1,32 @@
+format: 1
+coefficients:
+  k_env: 1.0
+  k_growth: 1.0
+  overrides: {}
+profiles:
+  nominal:
+    basis: avg
+    phases:
+    - kind: ramp
+      minutes: 10.0
+      to_pct: 100.0
+    - kind: steady
+      minutes: 60.0
+    - kind: ramp
+      minutes: 5.0
+      to_pct: 0.0
+  peak:
+    basis: peak
+    phases:
+    - kind: ramp
+      minutes: 5.0
+      to_pct: 100.0
+    - kind: steady
+      minutes: 30.0
+  stress:
+    basis: peak
+    phases:
+    - kind: steps
+      step_pct: 25.0
+      step_minutes: 10.0
+      max_pct: 300.0

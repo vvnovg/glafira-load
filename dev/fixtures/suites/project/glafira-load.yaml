@@ -1,0 +1,22 @@
+format: 1
+name: orders-platform
+services:
+  - id: orders
+    name: Orders Service
+    path: ../orders-service
+    contracts:
+      - kind: openapi
+        path: api/openapi.yaml
+    kafka:
+      topics:
+        orders.created: schemas/orders-created.avsc
+        orders.paid: { schema: schemas/orders-paid.avsc, direction: consume }
+environments:
+  - id: test
+    kind: test
+    http: https://orders.test.local
+    kafka: kafka-1.test.local:9092
+    schema_registry: https://sr.test.local
+    agents:
+      - { id: gen-1, url: http://10.0.1.11:7420 }
+      - { id: gen-2, url: http://10.0.1.12:7420, weight: 2 }

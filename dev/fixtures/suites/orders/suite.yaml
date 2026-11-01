@@ -1,0 +1,35 @@
+format: 1
+name: orders
+secrets: [API_TOKEN]                      # должны быть на агентах как GLAFIRA_LOAD_SECRET_API_TOKEN
+data:
+  users: { path: data/users.csv, mode: slice }   # slice — агенты делят строки; shared — у всех весь файл
+  skus:  data/skus.jsonl                         # короткая форма, mode: shared
+defaults:
+  http: { timeout_ms: 5000, headers: { Accept: application/json } }
+  kafka: { acks: all }                           # параметры rdkafka продюсера и потребителя
+  arrival: poisson                               # poisson | constant
+  max_in_flight: 1000                            # на агента
+scenarios:
+  - id: order-flow
+    drives: "http:orders:POST /v1/orders"        # по умолчанию операция первого шага
+    on_fail: stop                                # stop | continue
+    steps:
+      - id: create
+        http:
+          operation: "http:orders:POST /v1/orders"   # метод и путь из реестра, базовый URL из стенда
+          headers: { Authorization: "Bearer {{secret API_TOKEN}}" }
+          body: { customerId: "{{users.id}}", items: [{ sku: "{{pick skus.sku}}", qty: "{{int 1 5}}" }] }
+        expect: { status: 201, jsonpath: { "$.id": exists } }
+        extract: { order_id: "$.id" }
+      - id: get
+        http: { operation: "http:orders:GET /v1/orders/{id}", path: { id: "{{steps.create.order_id}}" } }
+        expect: { status: 200, schema: response, max_ms: 800 }
+      - kafka_consume:
+          operation: "kafka_consume:orders.created"
+          match: { key: "{{steps.create.order_id}}" }    # key | jsonpath: { "$.orderId": "…" }
+          timeout_ms: 10000
+      - kafka_produce:
+          operation: "kafka_produce:orders.paid"
+          key: "{{steps.create.order_id}}"
+          value: { orderId: "{{steps.create.order_id}}", paidAt: "{{now iso}}" }
+          encoding: json                              # json | avro (схема из контракта, Schema Registry стенда)
