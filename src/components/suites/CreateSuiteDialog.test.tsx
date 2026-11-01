@@ -1,5 +1,6 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { vi } from "vitest";
 import { renderWithClient } from "../../test/render";
 import { useWorkspace } from "../../state/workspace";
@@ -72,6 +73,31 @@ describe("CreateSuiteDialog", () => {
     screen.getByRole("button", { name: "Отмена" }).focus();
     await userEvent.tab();
     expect(screen.getByLabelText("Имя сьюта")).toHaveFocus();
+  });
+
+  it("returns focus to the opener on Escape and on Cancel", async () => {
+    function Host() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>
+            Открыть диалог
+          </button>
+          {open && <CreateSuiteDialog path="/p" onClose={() => setOpen(false)} />}
+        </>
+      );
+    }
+    renderWithClient(<Host />);
+    const opener = screen.getByRole("button", { name: "Открыть диалог" });
+    await userEvent.click(opener);
+    expect(screen.getByRole("dialog", { name: "Новый сьют" })).toHaveFocus();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(opener).toHaveFocus();
+    await userEvent.click(opener);
+    await userEvent.click(screen.getByRole("button", { name: "Отмена" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(opener).toHaveFocus();
   });
 
   it("explains an empty registry", async () => {

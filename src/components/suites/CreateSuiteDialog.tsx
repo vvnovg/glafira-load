@@ -23,7 +23,14 @@ export function CreateSuiteDialog({ path, onClose }: { path: string; onClose: ()
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
   // Тот же ключ, что у «Нагрузки ПРОМ»: список активных операций берётся из общего кэша.
   const ops = useQuery({ queryKey: ["registry", path, { status: "active" }], queryFn: () => api.registryList(path, { status: "active" }) });
-  useEffect(() => root.current?.focus(), []);
+  // Фокус уходит в диалог, а при закрытии (Esc, «Отмена», успешное создание) возвращается к открывшему элементу.
+  useEffect(() => {
+    const opener = document.activeElement;
+    root.current?.focus();
+    return () => {
+      if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
+    };
+  }, []);
   // Поиск фильтрует на клиенте; отмеченные галочки переживают смену фильтра.
   const list = useMemo(() => {
     const q = query.trim().toLowerCase();

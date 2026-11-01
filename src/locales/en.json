@@ -558,6 +558,7 @@
     },
     "checks": "checks: {{n}}",
     "selectStep": "Select a step to see its YAML",
+    "lineUnknown": "The line of this step is unknown: open the file",
     "line": "line {{line}}",
     "noSuite": "The suite did not parse: see the check report",
     "findings": "Check report",

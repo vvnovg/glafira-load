@@ -24,14 +24,28 @@ export function drivesOf(s: Scenario): string {
 /** Id шага: заданный или `step<N>` (1-based), как `Scenario::step_ids`. */
 export const stepId = (step: Step, index: number): string => step.id ?? `step${index + 1}`;
 
+/** Отступ строки: число ведущих пробелов и табов. */
+const indentOf = (line: string): number => line.length - line.trimStart().length;
+
 /**
- * Строки текста с `from` по `to` (1-based, `to` не включается): фрагмент шага от его строки до строки
- * следующего ключа карты `lines`. Хвостовые пустые строки отбрасываются; `from` за концом текста — пусто.
+ * Строки текста с `from` по `to` (1-based, `to` не включается): блок шага от его строки. Блок кончается на
+ * `to` (следующий ключ карты `lines`) либо раньше — на первой непустой строке с отступом не больше, чем у строки
+ * шага (маркер `- `): так в блок не попадают `on_fail`, соседние сценарии и верхнеуровневые `data:`/`defaults:`.
+ * Хвостовые пустые строки отбрасываются; `\r` (CRLF) убирается; `from` за концом текста — пусто.
  */
 export function sliceYaml(text: string, from: number, to: number): string {
-  const lines = text.split("\n");
+  const lines = text.split(/\r?\n/);
   const start = Math.min(lines.length, Math.max(1, from) - 1);
-  const end = Math.min(lines.length, Math.max(start, to - 1));
+  let end = Math.min(lines.length, Math.max(start, to - 1));
+  if (start < lines.length) {
+    const indent = indentOf(lines[start]);
+    for (let i = start + 1; i < end; i++) {
+      if (lines[i].trim() !== "" && indentOf(lines[i]) <= indent) {
+        end = i;
+        break;
+      }
+    }
+  }
   const out = lines.slice(start, end);
   while (out.length > 0 && out[out.length - 1].trim() === "") out.pop();
   return out.join("\n");
@@ -51,7 +65,7 @@ export function SuiteTree({ view, onOpenFile }: { view: SuiteView; onOpenFile: (
   const suite = view.suite;
   if (!suite) return <p className="muted">{t("suite.noSuite")}</p>;
   // Строка «за концом текста»: последний шаг режется до конца файла.
-  const total = view.text.split("\n").length + 1;
+  const total = view.text.split(/\r?\n/).length + 1;
   const line = selected ? view.lines[selected] : undefined;
   const fragment = line ? sliceYaml(view.text, line, nextLine(view.lines, line, total)) : null;
   return (
@@ -83,7 +97,10 @@ export function SuiteTree({ view, onOpenFile }: { view: SuiteView; onOpenFile: (
         ))}
       </ul>
       <div className="suite-step">
-        {fragment === null ? (
+        {selected && line === undefined ? (
+          // Rust не нашёл строку шага: не путаем с «шаг не выбран».
+          <p className="muted">{t("suite.lineUnknown")}</p>
+        ) : fragment === null ? (
           <p className="muted">{t("suite.selectStep")}</p>
         ) : (
           <>

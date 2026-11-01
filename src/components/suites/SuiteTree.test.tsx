@@ -12,6 +12,46 @@ describe("sliceYaml", () => {
     expect(sliceYaml(SUITE_TEXT, 50, 60)).toBe("");
   });
 
+  it("stops the last step of a scenario before sibling scenario keys", () => {
+    const text = `scenarios:
+  - id: a
+    steps:
+      - id: s1
+        http:
+          operation: "http:o:GET /x"
+      - id: s2
+        http:
+          operation: "http:o:GET /y"
+    on_fail: continue
+    rate: 5
+`;
+    // Строка 7 — последний шаг; `to` — за концом текста, как у последнего ключа карты.
+    expect(sliceYaml(text, 7, 13)).toBe(`      - id: s2\n        http:\n          operation: "http:o:GET /y"`);
+  });
+
+  it("stops the last step of the last scenario before a top-level key", () => {
+    const text = `scenarios:
+  - id: a
+    steps:
+      - http:
+          operation: "http:o:GET /x"
+        expect: { status: 200 }
+
+data:
+  users: 10
+defaults:
+  arrival: poisson
+`;
+    expect(sliceYaml(text, 4, 13)).toBe(`      - http:\n          operation: "http:o:GET /x"\n        expect: { status: 200 }`);
+  });
+
+  it("handles CRLF text without carriage returns in the fragment", () => {
+    const text = SUITE_TEXT.replace(/\n/g, "\r\n");
+    const out = sliceYaml(text, 6, 10);
+    expect(out).not.toContain("\r");
+    expect(out).toBe(`      - id: create\n        http:\n          operation: "http:orders:POST /v1/orders"\n        expect: { status: 201 }`);
+  });
+
   it("finds the nearest following line of the map", () => {
     const lines = { "scenarios[0]": 4, "scenarios[0].steps[0]": 6, "scenarios[0].steps[1]": 10 };
     expect(nextLine(lines, 6, 14)).toBe(10);
@@ -57,6 +97,25 @@ describe("SuiteTree", () => {
     await userEvent.click(screen.getByRole("button", { name: "Открыть файл" }));
     expect(onOpenFile).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: /step2 http:orders:GET/ }).closest("li")).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("shows a step block without the following keys of the suite", async () => {
+    const text = `${SUITE_TEXT}    on_fail: continue\ndata:\n  users: 10\n`;
+    render(<SuiteTree view={{ ...suiteView(), text }} onOpenFile={() => undefined} />);
+    await userEvent.click(screen.getByRole("button", { name: /step2 http:orders:GET/ }));
+    expect(screen.getByTestId("step-yaml")).toHaveTextContent("max_ms: 800");
+    expect(screen.getByTestId("step-yaml")).not.toHaveTextContent("on_fail");
+    expect(screen.getByTestId("step-yaml")).not.toHaveTextContent("data:");
+  });
+
+  it("says the line is unknown for a selected step without a line entry", async () => {
+    const view = suiteView();
+    delete view.lines["scenarios[0].steps[1]"];
+    render(<SuiteTree view={view} onOpenFile={() => undefined} />);
+    await userEvent.click(screen.getByRole("button", { name: /step2 http:orders:GET/ }));
+    expect(screen.getByText("Строка этого шага неизвестна: откройте файл")).toBeInTheDocument();
+    expect(screen.queryByText("Выберите шаг, чтобы увидеть его YAML")).toBeNull();
+    expect(screen.queryByTestId("step-yaml")).toBeNull();
   });
 
   it("selects a step from the keyboard", async () => {
