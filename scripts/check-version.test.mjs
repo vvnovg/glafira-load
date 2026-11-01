@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { VERSION_FILES, cargoVersion, checkVersions, versionsOf } from "./check-version.mjs";
+import { CHANGELOG_FILES, VERSION_FILES, cargoVersion, checkVersions, versionsOf } from "./check-version.mjs";
 
 const cargo = (v) => `[package]\nname = "x"\nversion = "${v}"\nedition = "2024"\n\n[dependencies]\nserde = "1"\n`;
 const workspace = `[workspace]\nresolver = "2"\nmembers = ["a"]\n\n[workspace.package]\nedition = "2024"\n`;
@@ -26,8 +26,24 @@ test("versionsOf и checkVersions: согласованные версии, ра
   assert.deepEqual(checkVersions(ok, "v0.2.0-beta.1").length, 1);
 });
 
+test("checkVersions: с тегом дата-заглушка xx в разделе списка изменений — проблема", () => {
+  const ok = { "package.json": '{"version":"0.2.0"}' };
+  const log = (date) => `# Changelog\n\n## 0.3.0\nReleased 2026-12-xx.\n- next\n\n## 0.2.0\nReleased ${date}. Stage L2.\n- a\n\n## 0.1.0\nReleased 2026-10-31.\n`;
+  // заглушка в разделе тега
+  const bad = checkVersions(ok, "v0.2.0", { "CHANGELOG.md": log("2026-11-xx"), "docs/changelog/ru.md": log("2026-11-02") });
+  assert.equal(bad.length, 1, bad.join("\n"));
+  assert.ok(bad[0].includes("CHANGELOG.md") && bad[0].includes("2026-11-xx"), bad[0]);
+  // дата проставлена; заглушка в разделе другой версии не мешает
+  assert.deepEqual(checkVersions(ok, "v0.2.0", { "CHANGELOG.md": log("2026-11-02") }), []);
+  // без тега списки изменений не проверяются
+  assert.deepEqual(checkVersions(ok, null, { "CHANGELOG.md": log("2026-11-xx") }), []);
+  // раздела версии нет — это не про заглушку
+  assert.deepEqual(checkVersions(ok, "v0.2.0", { "CHANGELOG.md": "# Changelog\n" }), []);
+});
+
 test("реальный репозиторий: все манифесты одной версии", () => {
   const files = Object.fromEntries(VERSION_FILES.map((p) => [p, readFileSync(p, "utf8")]));
   assert.deepEqual(checkVersions(files), []);
   assert.match(versionsOf(files).get("package.json"), /^\d+\.\d+\.\d+/);
+  assert.ok(CHANGELOG_FILES.every((p) => readFileSync(p, "utf8").includes("## ")));
 });

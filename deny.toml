@@ -1,8 +1,8 @@
 # Лицензии зависимостей: `cargo deny --workspace --config deny.toml check licenses` из корня (так же в CI): корни
 # графа — все крейты workspace, включая glafira-load-engine и glafira-load-cli, с их dev-зависимостями.
 # Белый список — только разрешительные лицензии; MPL-2.0 — копилефт на уровне файла, совместима, пока файлы этих
-# крейтов не изменяются. TLS — rustls с провайдером ring (C и ассемблер ring
-# собираются из исходников крейта и покрыты его лицензией). C-библиотеки rdkafka-sys (librdkafka, OpenSSL, zlib, zstd)
+# крейтов не изменяются. TLS — rustls с провайдером ring (C и ассемблер ring собираются из исходников крейта
+# и покрыты его лицензией). C-библиотеки rdkafka-sys (librdkafka, OpenSSL, zlib, zstd)
 # cargo-deny не видит — они перечислены в THIRD_PARTY.md (scripts/third-party.mjs, C_LIBRARIES).
 [licenses]
 confidence-threshold = 0.8

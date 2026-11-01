@@ -3,6 +3,9 @@ name: release
 # Установщики 0.2.0 без подписи: тег v* — сборка на трёх платформах, артефакты workflow и
 # черновик релиза GitHub с установщиками; job cli прикладывает в тот же черновик бинарники CLI
 # glafira-load-<os>-<arch>[.exe] с .sha256. Вручную — только сборка и артефакты (без релиза).
+# Тег должен быть ровно vX.Y.Z версии манифестов, а в CHANGELOG.md и docs/changelog/ru.md у этой версии должна стоять
+# дата вместо «xx» (проверяет check-version.mjs), поэтому тестовые теги вида v0.2.0-rc.1 не годятся: для проверки до
+# релиза запускайте workflow вручную (workflow_dispatch: `gh workflow run release.yml --ref <ветка>`).
 # Артефакты updater выключены (createUpdaterArtifacts: false), пока в tauri.conf.json заглушка
 # ключа: подпись updater, Apple и latest.json появятся на этапе L7.
 on:
