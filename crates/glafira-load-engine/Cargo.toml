@@ -31,9 +31,10 @@ time = { version = "0.3", features = ["formatting"] }
 uuid = { version = "1", features = ["v4"] }
 futures = "0.3"
 tokio-stream = "0.1"
+eventsource-stream = "0.2"
 
 [dev-dependencies]
-axum = "0.8"
+axum = { version = "0.8", features = ["multipart"] }
 tempfile = "3"
 testcontainers = "0.23"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "sync", "test-util", "net"] }

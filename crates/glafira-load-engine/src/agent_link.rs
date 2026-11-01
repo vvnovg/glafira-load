@@ -8,17 +8,20 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use eventsource_stream::Eventsource;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{FutureExt, StreamExt};
 use glafira_load_model::suite::{self, Suite};
+use reqwest::multipart::{Form, Part};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_util::sync::{CancellationToken, DropGuard};
 
 use crate::agent_api::{
-    AgentInfo, AgentSummary, ErrorSample, Event, Mode, PhaseEvent, RunRequest, RunStatus, Tick,
+    AgentInfo, AgentSummary, ApiError, ErrorSample, Event, Mode, PhaseEvent, RunRequest, RunStatus,
+    Tick,
 };
 use crate::context::{DataTable, RunContext, parse_data};
 use crate::errors::SampleCap;
@@ -37,7 +40,8 @@ pub const SECRET_PREFIX: &str = "GLAFIRA_LOAD_SECRET_";
 pub const DRAIN: Duration = Duration::from_secs(5);
 
 /// Ошибка связи с агентом; коды: `AGENT_UNREACHABLE`, `AGENT_BUSY`, `AGENT_VERSION`,
-/// `SECRET_MISSING`, `SUITE_INVALID`, `UNAUTHORIZED`, `NOT_FOUND`, `IO` (файлы прогона не собраны).
+/// `SECRET_MISSING`, `SUITE_INVALID`, `UNAUTHORIZED`, `NOT_FOUND`, `IO` (файлы прогона не собраны);
+/// `HttpAgent` передаёт код из тела ответа агента как есть (например, `BAD_REQUEST`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, thiserror::Error)]
 #[error("{code}: {message}")]
 pub struct LinkError {
@@ -728,6 +732,291 @@ impl AgentLink for LocalAgent {
                 ))
             }
         }
+    }
+}
+
+/// Агент за HTTP-протоколом §4.3: `reqwest` с `rustls`, bearer-токен, SSE через `eventsource-stream`.
+pub struct HttpAgent {
+    id: String,
+    base: String,
+    token: String,
+    controller_version: String,
+    idle_timeout: Duration,
+    client: reqwest::Client,
+}
+
+const INFO_TIMEOUT: Duration = Duration::from_secs(5);
+const START_TIMEOUT: Duration = Duration::from_secs(60);
+const FILES_TIMEOUT: Duration = Duration::from_secs(600);
+/// Сколько поток событий может молчать: агент шлёт keep-alive раз в 15 с, так что тишина
+/// дольше трёх интервалов — оборванное соединение (поток закрывается, контроллер переподключается).
+pub const EVENTS_IDLE_TIMEOUT: Duration = Duration::from_secs(45);
+
+impl HttpAgent {
+    pub fn new(id: &str, url: &str, token: &str, controller_version: &str) -> Self {
+        let client = reqwest::Client::builder()
+            .connect_timeout(INFO_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("reqwest client with rustls builds");
+        Self {
+            id: id.into(),
+            base: url.trim_end_matches('/').into(),
+            token: token.into(),
+            controller_version: controller_version.into(),
+            idle_timeout: EVENTS_IDLE_TIMEOUT,
+            client,
+        }
+    }
+
+    /// Другой предел тишины потока событий (по умолчанию `EVENTS_IDLE_TIMEOUT`).
+    pub fn with_idle_timeout(mut self, idle: Duration) -> Self {
+        self.idle_timeout = idle;
+        self
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("{}/v1{path}", self.base)
+    }
+
+    fn auth(&self, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        rb.bearer_auth(&self.token)
+    }
+
+    fn unreachable(&self, e: impl std::fmt::Display) -> LinkError {
+        LinkError::new(
+            "AGENT_UNREACHABLE",
+            format!("agent {} at {}: {e}", self.id, self.base),
+        )
+    }
+
+    /// Ошибка по ответу агента: `401` → `UNAUTHORIZED`, иначе код из тела `ApiError`, иначе по статусу.
+    async fn api_error(&self, resp: reqwest::Response) -> LinkError {
+        let status = resp.status().as_u16();
+        if status == 401 {
+            return LinkError::new(
+                "UNAUTHORIZED",
+                format!("agent {} rejected the token", self.id),
+            );
+        }
+        let by_status = match status {
+            409 => "AGENT_BUSY",
+            412 => "SECRET_MISSING",
+            422 => "SUITE_INVALID",
+            426 => "AGENT_VERSION",
+            _ => "AGENT_UNREACHABLE",
+        };
+        match resp.json::<ApiError>().await {
+            Ok(e) => {
+                // У `AGENT_VERSION` версии лежат в `agent`/`controller`; `names` — [агент, контроллер].
+                let names =
+                    if e.code == "AGENT_VERSION" && (e.agent.is_some() || e.controller.is_some()) {
+                        vec![
+                            e.agent.unwrap_or_default(),
+                            e.controller.unwrap_or_default(),
+                        ]
+                    } else {
+                        e.names
+                    };
+                let code = if e.code.is_empty() {
+                    by_status.to_string()
+                } else {
+                    e.code
+                };
+                LinkError {
+                    code,
+                    message: e.message,
+                    names,
+                }
+            }
+            Err(_) => LinkError::new(by_status, format!("agent {} answered {status}", self.id)),
+        }
+    }
+}
+
+#[async_trait]
+impl AgentLink for HttpAgent {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    async fn info(&self) -> Result<AgentInfo, LinkError> {
+        let resp = self
+            .auth(self.client.get(self.url("/info")))
+            .timeout(INFO_TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| self.unreachable(e))?;
+        if !resp.status().is_success() {
+            return Err(self.api_error(resp).await);
+        }
+        let info: AgentInfo = resp.json().await.map_err(|e| self.unreachable(e))?;
+        if !same_minor(&info.version, &self.controller_version) {
+            return Err(LinkError::new(
+                "AGENT_VERSION",
+                format!(
+                    "agent {} runs version {}, controller is {}",
+                    self.id, info.version, self.controller_version
+                ),
+            )
+            .with_names(vec![info.version.clone(), self.controller_version.clone()]));
+        }
+        Ok(info)
+    }
+
+    /// Бандл `multipart/form-data`: `run.json`, `suite.yaml` и по части `data/<набор>` на набор данных.
+    async fn start(
+        &self,
+        req: &RunRequest,
+        suite_text: &str,
+        data: &BTreeMap<String, Vec<u8>>,
+    ) -> Result<(), LinkError> {
+        let run_json = serde_json::to_vec(req).map_err(|e| self.unreachable(e))?;
+        let part = |bytes: Vec<u8>, file: String, mime: &str| {
+            Part::bytes(bytes)
+                .file_name(file)
+                .mime_str(mime)
+                .map_err(|e| self.unreachable(e))
+        };
+        // Имена частей — как есть (`name="data/users"`): по умолчанию reqwest кодирует `/` и шлёт
+        // `name*=utf-8''data%2Fusers`, а multer у агента такое имя не читает. Имена наборов
+        // проверены сьютом (`[A-Za-z0-9_-]`), но кавычки и переводы строк сломали бы заголовок.
+        if let Some(bad) = data.keys().find(|n| n.contains(['"', '\\', '\r', '\n'])) {
+            return Err(LinkError::new(
+                "SUITE_INVALID",
+                format!("data set name {bad:?} cannot be sent to agent {}", self.id),
+            ));
+        }
+        let mut form = Form::new()
+            .percent_encode_noop()
+            .part(
+                "run.json",
+                part(run_json, "run.json".into(), "application/json")?,
+            )
+            .part(
+                "suite.yaml",
+                part(
+                    suite_text.as_bytes().to_vec(),
+                    "suite.yaml".into(),
+                    "application/yaml",
+                )?,
+            );
+        for (name, bytes) in data {
+            form = form.part(
+                format!("data/{name}"),
+                part(bytes.clone(), name.clone(), "application/octet-stream")?,
+            );
+        }
+        let resp = self
+            .auth(self.client.post(self.url("/runs")))
+            .multipart(form)
+            .timeout(START_TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| self.unreachable(e))?;
+        if resp.status().is_success() {
+            Ok(())
+        } else {
+            Err(self.api_error(resp).await)
+        }
+    }
+
+    /// Поток `(id, событие)`; кончается при закрытии SSE агентом (после `done`), обрыве или тишине
+    /// дольше `idle_timeout`. Событие разбирается только по `data` (JSON с тегом `type`).
+    async fn events(
+        &self,
+        run_id: &str,
+        last_id: Option<u64>,
+    ) -> Result<BoxStream<'static, (u64, Event)>, LinkError> {
+        let mut rb = self
+            .auth(self.client.get(self.url(&format!("/runs/{run_id}/events"))))
+            .header(reqwest::header::ACCEPT, "text/event-stream");
+        if let Some(id) = last_id {
+            rb = rb.header("Last-Event-ID", id.to_string());
+        }
+        // Заголовки ответа ждём не дольше предела тишины потока.
+        let idle = self.idle_timeout;
+        let resp = tokio::time::timeout(idle, rb.send())
+            .await
+            .map_err(|_| self.unreachable(format!("no response for {} ms", idle.as_millis())))?
+            .map_err(|e| self.unreachable(e))?;
+        if !resp.status().is_success() {
+            return Err(self.api_error(resp).await);
+        }
+        let bytes =
+            tokio_stream::StreamExt::timeout(resp.bytes_stream(), idle).map(move |r| match r {
+                Ok(Ok(chunk)) => Ok(chunk),
+                Ok(Err(e)) => Err(e.to_string()),
+                Err(_) => Err(format!("no data for {} ms", idle.as_millis())),
+            });
+        let agent = self.id.clone();
+        // `gap` агент шлёт без `id:`; в начале потока у него нет id — берём тот, с которого продолжаем.
+        let resume = last_id.unwrap_or(0);
+        let stream = bytes
+            .eventsource()
+            .take_while({
+                let agent = agent.clone();
+                move |r| {
+                    if let Err(e) = r {
+                        tracing::warn!(agent = %agent, "event stream broke: {e}");
+                    }
+                    futures::future::ready(r.is_ok())
+                }
+            })
+            .filter_map(move |r| {
+                let agent = agent.clone();
+                async move {
+                    let ev = r.ok()?;
+                    let parsed: Event = match serde_json::from_str(&ev.data) {
+                        Ok(parsed) => parsed,
+                        Err(e) => {
+                            let name = &ev.event;
+                            tracing::warn!(agent = %agent, "skipping undecodable event {name}: {e}");
+                            return None;
+                        }
+                    };
+                    let id = if ev.id.is_empty() {
+                        resume
+                    } else {
+                        ev.id.parse::<u64>().ok()?
+                    };
+                    Some((id, parsed))
+                }
+            });
+        Ok(stream.boxed())
+    }
+
+    async fn stop(&self, run_id: &str) -> Result<(), LinkError> {
+        let resp = self
+            .auth(self.client.post(self.url(&format!("/runs/{run_id}/stop"))))
+            .timeout(INFO_TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| self.unreachable(e))?;
+        // 404: прогон уже завершён и убран — остановка не нужна.
+        if resp.status().is_success() || resp.status().as_u16() == 404 {
+            Ok(())
+        } else {
+            Err(self.api_error(resp).await)
+        }
+    }
+
+    /// tar папки прогона; агент отдаёт его только после `done` (до того — `409 AGENT_BUSY`).
+    async fn files(&self, run_id: &str) -> Result<Vec<u8>, LinkError> {
+        let resp = self
+            .auth(self.client.get(self.url(&format!("/runs/{run_id}/files"))))
+            .timeout(FILES_TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| self.unreachable(e))?;
+        if !resp.status().is_success() {
+            return Err(self.api_error(resp).await);
+        }
+        Ok(resp
+            .bytes()
+            .await
+            .map_err(|e| self.unreachable(e))?
+            .to_vec())
     }
 }
 

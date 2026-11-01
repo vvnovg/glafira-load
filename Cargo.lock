@@ -1904,6 +1904,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "csv",
+ "eventsource-stream",
  "form_urlencoded",
  "futures",
  "glafira-load-model",
