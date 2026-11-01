@@ -8,5 +8,6 @@ pub mod errors;
 pub mod executor;
 pub mod expect;
 pub mod extract;
+pub mod http;
 pub mod metrics;
 pub mod scheduler;
