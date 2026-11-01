@@ -5,6 +5,8 @@
 pub mod agent_api;
 pub mod context;
 pub mod errors;
+pub mod executor;
 pub mod expect;
 pub mod extract;
 pub mod metrics;
+pub mod scheduler;
