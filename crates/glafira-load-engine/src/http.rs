@@ -28,6 +28,27 @@ const PATH_SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'_')
     .remove(b'~');
 
+/// Все формы записи секретов, которые могут попасть в URL примера ошибки: исходное значение,
+/// сегмент пути (`PATH_SEGMENT`), `application/x-www-form-urlencoded` (значения query в reqwest)
+/// и полное percent-кодирование. Пустые значения и дубликаты отбрасываются.
+fn secret_variants(secrets: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for s in secrets.iter().filter(|s| !s.is_empty()) {
+        let forms = [
+            s.clone(),
+            utf8_percent_encode(s, PATH_SEGMENT).to_string(),
+            utf8_percent_encode(s, NON_ALPHANUMERIC).to_string(),
+            form_urlencoded::byte_serialize(s.as_bytes()).collect::<String>(),
+        ];
+        for f in forms {
+            if !out.contains(&f) {
+                out.push(f);
+            }
+        }
+    }
+    out
+}
+
 /// Метод и шаблон пути из id операции `http:<service>:<METHOD> <path>`.
 pub fn parse_operation(id: &str) -> Option<(Method, &str)> {
     let rest = id.strip_prefix("http:")?;
@@ -113,6 +134,7 @@ pub struct HttpExecutor {
     client: Client,
     base_url: String,
     defaults: HttpDefaults,
+    /// Секреты во всех формах кодирования (см. `secret_variants`) для маскирования примеров.
     secrets: Vec<String>,
     schemas: BTreeMap<String, SchemaSummary>,
 }
@@ -124,6 +146,14 @@ impl HttpExecutor {
         defaults: &HttpDefaults,
         secrets: &[String],
     ) -> Result<Self, String> {
+        let trimmed = base_url.trim_end_matches('/');
+        let parsed = reqwest::Url::parse(trimmed)
+            .map_err(|e| format!("invalid base url `{base_url}`: {e}"))?;
+        if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+            return Err(format!(
+                "invalid base url `{base_url}`: expected http(s)://host[:port]"
+            ));
+        }
         let client = Client::builder()
             .redirect(redirect::Policy::none())
             .pool_max_idle_per_host(1024)
@@ -132,9 +162,9 @@ impl HttpExecutor {
             .map_err(|e| format!("http client: {e}"))?;
         Ok(Self {
             client,
-            base_url: base_url.trim_end_matches('/').to_string(),
+            base_url: trimmed.to_string(),
             defaults: defaults.clone(),
-            secrets: secrets.to_vec(),
+            secrets: secret_variants(secrets),
             schemas: BTreeMap::new(),
         })
     }
@@ -147,6 +177,14 @@ impl HttpExecutor {
 
     pub fn base_url(&self) -> &str {
         &self.base_url
+    }
+
+    /// Ошибка с замаскированным сообщением (URL в тексте reqwest может содержать секрет).
+    fn masked(&self, e: StepError) -> StepError {
+        StepError {
+            message: sample(&e.message, &self.secrets),
+            ..e
+        }
     }
 
     async fn run_http(
@@ -195,7 +233,9 @@ impl HttpExecutor {
         if let Some(b) = &body {
             builder = builder.body(b.clone());
         }
-        let request = builder.build().map_err(|e| build_error(e.to_string()))?;
+        let request = builder
+            .build()
+            .map_err(|e| self.masked(build_error(e.to_string())))?;
         let full_url = request.url().to_string();
         let request_sample = || {
             let body_text = body
@@ -212,25 +252,21 @@ impl HttpExecutor {
         };
 
         let started = Instant::now();
-        let response = self
-            .client
-            .execute(request)
-            .await
-            .map_err(|e| map_send_error(e, timeout_ms))
-            .map_err(|e| {
-                let masked = sample(&e.message, &self.secrets);
-                StepError {
-                    message: masked,
-                    ..e
-                }
+        let response = self.client.execute(request).await.map_err(|e| {
+            self.masked(map_send_error(e, timeout_ms))
                 .with_sample(Some(request_sample()), None)
-            })?;
+        })?;
         let status = response.status().as_u16();
         let resp_headers = response.headers().clone();
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| map_send_error(e, timeout_ms).with_sample(Some(request_sample()), None))?;
+        let bytes = response.bytes().await.map_err(|e| {
+            // Тело не прочитано: в примере ответа остаются статус и заголовки.
+            let head = sample(
+                &format!("{status}\n{}", header_lines(&resp_headers)),
+                &self.secrets,
+            );
+            self.masked(map_send_error(e, timeout_ms))
+                .with_sample(Some(request_sample()), Some(head))
+        })?;
         let latency = started.elapsed();
         let latency_us = latency.as_micros() as u64;
         let latency_ms = latency.as_secs_f64() * 1000.0;
@@ -348,6 +384,10 @@ mod tests {
             )
             .route(
                 "/fail",
+                get(|| async { (StatusCode::INTERNAL_SERVER_ERROR, "boom") }),
+            )
+            .route(
+                "/v1/fail/{id}",
                 get(|| async { (StatusCode::INTERNAL_SERVER_ERROR, "boom") }),
             )
             .route(
@@ -730,5 +770,122 @@ mod tests {
             .unwrap();
         assert_eq!(out.body.unwrap()["echo"], json!({"raw": "7"}));
         assert_eq!(out.bytes_out, 12);
+    }
+
+    /// Секрет со спецсимволами: в query и в параметре пути он попадает в URL в закодированном виде.
+    const TRICKY: &str = "a+b/c=d e";
+
+    fn tricky_ctx() -> RunContext {
+        let mut run = run_ctx();
+        run.secrets.insert("TRICKY".to_string(), TRICKY.to_string());
+        run
+    }
+
+    fn tricky_executor(base: &str) -> HttpExecutor {
+        let defaults = HttpDefaults {
+            timeout_ms: 2000,
+            headers: BTreeMap::new(),
+        };
+        HttpExecutor::new(base, &defaults, &[TRICKY.to_string()]).unwrap()
+    }
+
+    fn tricky_step(path: &str) -> Step {
+        let mut http = http_step(&format!("http:orders:GET {path}"));
+        http.path.insert("id".into(), "{{secret TRICKY}}".into());
+        http.query.insert("q".into(), "{{secret TRICKY}}".into());
+        step(http, Expect::default(), &[])
+    }
+
+    /// Ни исходный секрет, ни его закодированные формы не должны остаться в тексте.
+    fn assert_no_secret(text: &str) {
+        for form in secret_variants(&[TRICKY.to_string()]) {
+            assert!(!text.contains(&form), "найдено `{form}` в: {text}");
+        }
+    }
+
+    #[test]
+    fn secret_variants_cover_encodings() {
+        let v = secret_variants(&[TRICKY.to_string(), String::new(), TRICKY.to_string()]);
+        assert!(v.contains(&TRICKY.to_string()));
+        assert!(v.contains(&"a%2Bb%2Fc%3Dd%20e".to_string()), "{v:?}");
+        assert!(v.contains(&"a%2Bb%2Fc%3Dd+e".to_string()), "{v:?}");
+        let mut dedup = v.clone();
+        dedup.sort();
+        dedup.dedup();
+        assert_eq!(dedup.len(), v.len(), "без дубликатов");
+        assert!(secret_variants(&[String::new()]).is_empty());
+    }
+
+    #[tokio::test]
+    async fn encoded_secrets_are_masked_in_url_samples() {
+        let base = stub().await;
+        let ex = tricky_executor(&base);
+        let run = tricky_ctx();
+        let mut ctx = IterationCtx::new(&run, 0);
+        let e = ex
+            .execute(&tricky_step("/v1/fail/{id}"), &mut ctx)
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, StepCode::Http5xx);
+        let req = e.request.unwrap();
+        assert!(req.contains("***"), "{req}");
+        assert_no_secret(&req);
+        assert_no_secret(&e.response.unwrap());
+        assert_no_secret(&e.message);
+
+        // Ошибка отправки: reqwest вставляет URL в сообщение.
+        let free = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = free.local_addr().unwrap();
+        drop(free);
+        let ex = tricky_executor(&format!("http://{addr}"));
+        let e = ex
+            .execute(&tricky_step("/v1/fail/{id}"), &mut ctx)
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, StepCode::Connect);
+        assert!(e.message.contains("***"), "{}", e.message);
+        assert_no_secret(&e.message);
+        assert_no_secret(&e.request.unwrap());
+    }
+
+    #[tokio::test]
+    async fn body_read_failure_keeps_masked_status_and_headers() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = conn.read(&mut buf);
+            let _ = conn.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nX-Token: s3cr3t\r\n\r\npartial",
+            );
+        });
+        let ex = executor(&format!("http://{addr}"));
+        let run = run_ctx();
+        let mut ctx = IterationCtx::new(&run, 0);
+        let e = ex.execute(&get_step("/cut"), &mut ctx).await.unwrap_err();
+        assert_eq!(e.code, StepCode::Connect);
+        assert!(e.request.is_some());
+        let resp = e.response.expect("пример ответа сохраняется");
+        assert!(resp.starts_with("200\n"), "{resp}");
+        assert!(resp.contains("x-token: ***"), "{resp}");
+        assert!(!resp.contains("s3cr3t"), "{resp}");
+    }
+
+    #[test]
+    fn base_url_is_validated() {
+        let defaults = HttpDefaults {
+            timeout_ms: 1000,
+            headers: BTreeMap::new(),
+        };
+        for bad in ["", "not a url", "localhost:8080", "ftp://host", "http://"] {
+            let e = HttpExecutor::new(bad, &defaults, &[])
+                .err()
+                .unwrap_or_else(|| panic!("`{bad}` должен быть отвергнут"));
+            assert!(e.starts_with("invalid base url"), "{e}");
+        }
+        let ok = HttpExecutor::new("http://127.0.0.1:8080/", &defaults, &[]).unwrap();
+        assert_eq!(ok.base_url(), "http://127.0.0.1:8080");
     }
 }
