@@ -101,14 +101,12 @@ pub async fn agent(args: AgentArgs) -> Exit {
         state.secrets_env.len()
     );
     // Ctrl+C: текущий прогон останавливается, чтобы его SSE закончился `done` и мягкое завершение
-    // сервера не ждало конца профиля.
+    // сервера не ждало конца профиля; сервер закрывается, когда прогон ушёл в историю с файлами.
     let on_shutdown = state.clone();
     let shutdown = async move {
         let _ = tokio::signal::ctrl_c().await;
         tracing::info!("shutting down");
-        if let Some(run_id) = on_shutdown.busy() {
-            let _ = on_shutdown.stop(&run_id).await;
-        }
+        on_shutdown.shutdown().await;
     };
     if let Err(e) = server::serve(listener, state, shutdown).await {
         return startup_error(&format!("server: {e}"));

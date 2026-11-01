@@ -10,7 +10,7 @@ use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use glafira_load_engine::agent_api::{Event, RunStatus};
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
@@ -175,8 +175,19 @@ pub fn stream(
     log: Arc<EventLog>,
     last_id: Option<u64>,
 ) -> impl Stream<Item = Result<SseEvent, Infallible>> + Send + 'static {
+    log_stream(log, last_id).map(|(id, event)| Ok(to_sse(id, &event)))
+}
+
+/// События потока SSE с их `id` (`gap` — без `id`). `last_id` больше последнего известного
+/// (клиент слушал другой прогон или агент до рестарта) — как подключение без `Last-Event-ID`.
+pub fn log_stream(
+    log: Arc<EventLog>,
+    last_id: Option<u64>,
+) -> impl Stream<Item = (Option<u64>, Event)> + Send + 'static {
     // подписка до снимка: событие между ними придёт по каналу и отсечётся по `floor`
     let rx = log.subscribe();
+    // `last_id()` растёт монотонно: id не больше него после подписки не устареет
+    let last_id = last_id.filter(|&id| id <= log.last_id());
     let replay = log.replay(last_id);
     let mut pending = VecDeque::new();
     if replay.gap {
@@ -200,7 +211,7 @@ pub fn stream(
                     st.finished = true;
                     st.pending.clear();
                 }
-                return Some((Ok(to_sse(id, &event)), (st, log)));
+                return Some(((id, event), (st, log)));
             }
             if st.finished {
                 return None;
@@ -251,7 +262,6 @@ pub async fn events(
 
 #[cfg(test)]
 mod tests {
-    use futures::StreamExt;
     use glafira_load_engine::agent_api::{AgentSummary, Tick};
 
     use super::*;
@@ -311,6 +321,51 @@ mod tests {
             log.replay(None).gap,
             "свежее подключение тоже пропустило начало"
         );
+    }
+
+    /// Имена событий потока `log_stream` до его конца.
+    async fn names(log: Arc<EventLog>, last_id: Option<u64>) -> Vec<&'static str> {
+        log_stream(log, last_id)
+            .map(|(_, ev)| event_name(&ev))
+            .collect()
+            .await
+    }
+
+    #[tokio::test]
+    async fn stream_from_an_evicted_id_starts_with_gap() {
+        let log = Arc::new(EventLog::new());
+        let now = Instant::now();
+        log.push_at(tick(1), now - Duration::from_secs(200));
+        log.push_at(tick(2), now - Duration::from_secs(200));
+        log.push_at(tick(3), now);
+        log.push_at(done(), now);
+        assert_eq!(names(log.clone(), Some(1)).await, ["gap", "tick", "done"]);
+        let ids: Vec<Option<u64>> = log_stream(log, Some(1)).map(|(id, _)| id).collect().await;
+        assert_eq!(ids, [None, Some(3), Some(4)]);
+    }
+
+    #[tokio::test]
+    async fn last_event_id_beyond_the_last_is_a_fresh_connection() {
+        let log = Arc::new(EventLog::new());
+        log.push(tick(1));
+        log.push(tick(2));
+        log.push(done());
+        assert_eq!(names(log.clone(), Some(99)).await, ["tick", "tick", "done"]);
+        assert_eq!(
+            stream(log.clone(), Some(99))
+                .collect::<Vec<_>>()
+                .await
+                .len(),
+            3
+        );
+        // живой прогон: поток с чужим id не молчит, а отдаёт новые события
+        let live = Arc::new(EventLog::new());
+        live.push(tick(1));
+        let collected = tokio::spawn(names(live.clone(), Some(42)));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        live.push(tick(2));
+        live.push(done());
+        assert_eq!(collected.await.unwrap(), ["tick", "tick", "done"]);
     }
 
     #[tokio::test]

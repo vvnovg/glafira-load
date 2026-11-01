@@ -28,11 +28,22 @@ pub fn tar_dir(dir: &Path) -> std::io::Result<Vec<u8>> {
     builder.into_inner()
 }
 
+/// Файлы отдаются только завершённому прогону: пока он идёт или собирает файлы `LocalAgent`,
+/// tar был бы неполным — 409 `AGENT_BUSY` (контроллер Task 11 берёт файлы после `done`).
 pub async fn files(
     State(state): State<Arc<AgentState>>,
     AxPath(run_id): AxPath<String>,
 ) -> Response {
-    let Some(dir) = state.run_dir(&run_id).filter(|d| d.is_dir()) else {
+    // Сначала текущий прогон, затем история: `finish` переносит прогон под замком `current`,
+    // так что ушедший из текущих уже виден в истории.
+    if state.busy().as_deref() == Some(run_id.as_str()) {
+        return api_error(
+            StatusCode::CONFLICT,
+            "AGENT_BUSY",
+            "run is still in progress",
+        );
+    }
+    let Some(dir) = state.history_dir(&run_id).filter(|d| d.is_dir()) else {
         return not_found(&run_id);
     };
     match tokio::task::spawn_blocking(move || tar_dir(&dir)).await {

@@ -36,11 +36,14 @@ pub const AGENT_LOG: &str = "agent.log";
 pub const SUMMARY_FILE: &str = "summary.yaml";
 pub const REQUEST_FILE: &str = "run.json";
 
-/// Запас сторожа сверх `--drain-ms`: после дренажа `LocalAgent` ещё сводит итог и шлёт `done`,
-/// сторож не должен обгонять его на одинаковых интервалах.
-const DRAIN_GRACE: Duration = Duration::from_secs(1);
+/// Запас сторожа сверх `--drain-ms`: `LocalAgent` дренирует ровно `drain` (`with_drain`), затем
+/// до 1 с ждёт прерванные итерации (`ABORT_GRACE` планировщика), сводит итог и шлёт `done`.
+/// Сторож не должен обгонять движок, иначе файлы остановленного прогона теряются.
+const DRAIN_GRACE: Duration = Duration::from_secs(3);
 /// Сколько насос ждёт файлы `LocalAgent` после `done` (задача прогона к этому моменту кончается).
 const FILES_TIMEOUT: Duration = Duration::from_secs(30);
+/// Шаг опроса при ожидании конца прогона на выключении агента.
+const SHUTDOWN_POLL: Duration = Duration::from_millis(50);
 
 pub struct AgentConfig {
     pub work_dir: PathBuf,
@@ -72,7 +75,7 @@ pub struct FinishedRun {
     pub log: Option<Arc<EventLog>>,
 }
 
-/// Порядок замков: `current`, затем `history` (только в `finish`); остальные места берут по одному.
+/// Порядок замков: `current`, затем `history` (только в `finish` и `launch`); остальные места берут по одному.
 pub struct AgentState {
     pub current: Mutex<Option<RunningRun>>,
     pub history: Mutex<Vec<FinishedRun>>,
@@ -280,7 +283,8 @@ impl AgentState {
         for entry in std::fs::read_dir(&config.work_dir)? {
             let entry = entry?;
             let dir = entry.path();
-            if !dir.is_dir() {
+            // Прогон — только папка с `run.json`: чужие папки в `--work` не трогаются.
+            if !dir.is_dir() || !dir.join(REQUEST_FILE).is_file() {
                 continue;
             }
             let started_at = entry
@@ -358,6 +362,16 @@ impl AgentState {
         {
             return Some(r.dir.clone());
         }
+        self.history
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|r| r.run_id == run_id)
+            .map(|r| r.dir.clone())
+    }
+
+    /// Папка завершённого прогона (из истории); текущий прогон сюда не входит.
+    pub fn history_dir(&self, run_id: &str) -> Option<PathBuf> {
         self.history
             .lock()
             .unwrap()
@@ -446,8 +460,11 @@ impl AgentState {
         }
         let dir = self.work_dir.join(&run_id);
         let log = Arc::new(EventLog::new());
-        let agent =
-            Arc::new(LocalAgent::new(&req.agent_id, executor_factory()).with_secrets(secrets));
+        let agent = Arc::new(
+            LocalAgent::new(&req.agent_id, executor_factory())
+                .with_secrets(secrets)
+                .with_drain(self.drain),
+        );
         {
             let mut current = self.current.lock().unwrap();
             if let Some(r) = current.as_ref() {
@@ -469,7 +486,6 @@ impl AgentState {
             dir: dir.clone(),
             armed: true,
         };
-        self.prune(1);
         if let Err(e) = self.prepare_dir(&dir, &req) {
             return Err(api_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -487,14 +503,31 @@ impl AgentState {
             ));
         }
         launch.armed = false;
-        // Насос запускается под замком: его `finish` не обгонит запись `pump`.
-        let mut current = self.current.lock().unwrap();
-        let pump = tokio::spawn(pump_events(self.clone(), agent, run_id.clone(), dir));
-        if let Some(r) = current.as_mut()
-            && r.run_id == run_id
         {
-            r.pump = Some(pump);
+            // Насос запускается под замком: его `finish` не обгонит запись `pump`.
+            let mut current = self.current.lock().unwrap();
+            if let Some(r) = current.as_mut()
+                && r.run_id == run_id
+            {
+                // Старые прогоны удаляются только после принятого старта (отказ ничего не
+                // стирает) и до насоса: под замком `current` новый прогон в историю не попадёт.
+                self.prune(1);
+                r.pump = Some(tokio::spawn(pump_events(
+                    self.clone(),
+                    agent,
+                    run_id.clone(),
+                    dir,
+                )));
+                return Ok(());
+            }
         }
+        // Пока шёл `start`, прогон закрыли (остановка и сторож): он уже в истории,
+        // а запущенный `LocalAgent` без насоса никто бы не дослушал — останавливаем его.
+        tracing::warn!(run_id, "run was closed while starting, stopping it");
+        if let Err(e) = agent.stop(&run_id).await {
+            tracing::warn!(run_id, "stop: {}", e.message);
+        }
+        self.prune(0);
         Ok(())
     }
 
@@ -556,6 +589,25 @@ impl AgentState {
             state.force_done(&id, RunStatus::Stopped);
         });
         Ok(())
+    }
+
+    /// Выключение агента: текущий прогон останавливается, и выключение ждёт, пока он не уйдёт
+    /// в историю с файлами (не дольше дренажа, запаса сторожа и сбора файлов).
+    pub async fn shutdown(self: &Arc<Self>) {
+        let Some(run_id) = self.busy() else {
+            return;
+        };
+        let _ = self.stop(&run_id).await;
+        let limit = self.drain + DRAIN_GRACE + FILES_TIMEOUT;
+        let waited = tokio::time::timeout(limit, async {
+            while self.busy().is_some() {
+                tokio::time::sleep(SHUTDOWN_POLL).await;
+            }
+        })
+        .await;
+        if waited.is_err() {
+            tracing::warn!(run_id, "run did not finish in {} s", limit.as_secs());
+        }
     }
 
     /// Принудительное завершение: насос прерывается, в буфер идёт `done` с пустой сводкой
@@ -769,6 +821,7 @@ mod tests {
         ] {
             let dir = work.path().join(name);
             std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join(REQUEST_FILE), "{}").unwrap();
             if let Some(text) = summary {
                 std::fs::write(dir.join(SUMMARY_FILE), text).unwrap();
             }
@@ -798,6 +851,45 @@ mod tests {
             "у прогонов до рестарта буфера нет"
         );
         assert_eq!(state.run_dir("c"), Some(work.path().join("c")));
+    }
+
+    #[test]
+    fn startup_keeps_folders_that_are_not_runs() {
+        for keep_runs in [0, 1] {
+            let work = tempfile::tempdir().unwrap();
+            let notes = work.path().join("notes");
+            std::fs::create_dir_all(&notes).unwrap();
+            std::fs::write(notes.join("readme.txt"), "mine").unwrap();
+            std::fs::write(work.path().join("loose.txt"), "mine").unwrap();
+            for name in ["r1", "r2"] {
+                let dir = work.path().join(name);
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join(REQUEST_FILE), "{}").unwrap();
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            let state = AgentState::new(AgentConfig {
+                work_dir: work.path().to_path_buf(),
+                keep_runs,
+                drain: Duration::from_secs(1),
+                token: "t".into(),
+                secrets_env: BTreeMap::new(),
+                version: "0.2.0".into(),
+            })
+            .unwrap();
+            assert_eq!(
+                state
+                    .list()
+                    .iter()
+                    .map(|r| r.run_id.as_str())
+                    .collect::<Vec<_>>(),
+                ["r2"],
+                "keep_runs {keep_runs}: папка без run.json — не прогон"
+            );
+            assert!(!work.path().join("r1").exists());
+            assert!(notes.join("readme.txt").is_file(), "чужая папка цела");
+            assert!(work.path().join("loose.txt").is_file());
+            assert_eq!(state.run_dir("notes"), None);
+        }
     }
 
     #[test]

@@ -32,11 +32,19 @@ struct Agent {
 }
 
 async fn start_agent(secrets: BTreeMap<String, String>, keep_runs: usize) -> Agent {
+    start_agent_with(secrets, keep_runs, Duration::from_millis(1500)).await
+}
+
+async fn start_agent_with(
+    secrets: BTreeMap<String, String>,
+    keep_runs: usize,
+    drain: Duration,
+) -> Agent {
     let work = tempfile::tempdir().unwrap();
     let config = AgentConfig {
         work_dir: work.path().to_path_buf(),
         keep_runs,
-        drain: Duration::from_millis(1500),
+        drain,
         token: TOKEN.into(),
         secrets_env: secrets,
         version: env!("CARGO_PKG_VERSION").into(),
@@ -54,6 +62,39 @@ async fn start_agent(secrets: BTreeMap<String, String>, keep_runs: usize) -> Age
         _work: work,
         state,
     }
+}
+
+/// Стенд, у которого создание заказа висит минуту: итерации не успевают за дренаж.
+async fn slow_stand() -> String {
+    let app = axum::Router::new().fallback(|| async {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        (
+            AxStatus::CREATED,
+            axum::Json(serde_json::json!({"id": "o-1"})),
+        )
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}")
+}
+
+/// Имена файлов tar.
+fn tar_names(bytes: &[u8]) -> Vec<String> {
+    tar::Archive::new(bytes)
+        .entries()
+        .unwrap()
+        .map(|e| e.unwrap().path().unwrap().to_string_lossy().into_owned())
+        .collect()
+}
+
+async fn get_files(agent: &Agent, run_id: &str) -> reqwest::Response {
+    Client::new()
+        .get(format!("{}/v1/runs/{run_id}/files", agent.base))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap()
 }
 
 fn run_id() -> String {
@@ -292,6 +333,14 @@ async fn busy_then_stop_with_last_event_id() {
     assert!(err.message.contains(&req.run_id));
     let info: AgentInfo = get_json(&agent, "/v1/info").await;
     assert_eq!(info.busy.as_deref(), Some(req.run_id.as_str()));
+    // файлы идущего прогона не отдаются: tar был бы неполным
+    let r = get_files(&agent, &req.run_id).await;
+    assert_eq!(r.status(), StatusCode::CONFLICT);
+    let err: ApiError = r.json().await.unwrap();
+    assert_eq!(
+        (err.code.as_str(), err.message.as_str()),
+        ("AGENT_BUSY", "run is still in progress")
+    );
     // три события, обрыв, переподключение с Last-Event-ID
     let first = read_sse(&agent, &req.run_id, None, 3).await;
     assert_eq!(first.len(), 3);
@@ -417,6 +466,17 @@ async fn keep_runs_removes_old_folders() {
     read_sse(&agent, &a.run_id, None, usize::MAX).await;
     let dir_a = agent.state.run_dir(&a.run_id).unwrap();
     assert!(dir_a.is_dir());
+    // отклонённый старт (нет набора данных) старые прогоны не удаляет
+    let rejected = request(Mode::Smoke, 0.0, &stand, vec![], env!("CARGO_PKG_VERSION"));
+    let with_data = SUITE.replacen(
+        "name: orders-http\n",
+        "name: orders-http\ndata:\n  users: data/users.csv\n",
+        1,
+    );
+    let r = post_run(&agent, &rejected, &with_data).await;
+    assert_eq!(r.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(dir_a.is_dir(), "a rejected start keeps the previous run");
+    assert!(!agent.state.work_dir.join(&rejected.run_id).exists());
     let b = request(Mode::Smoke, 0.0, &stand, vec![], env!("CARGO_PKG_VERSION"));
     assert_eq!(
         post_run(&agent, &b, SUITE).await.status(),
@@ -447,4 +507,62 @@ fn agent_without_token_exits_with_3() {
     .assert()
     .code(3)
     .stderr(predicate::str::contains("--listen"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stop_with_short_drain_keeps_the_run_files() {
+    // `--drain-ms 500`, итерации висят минуту: движок прерывает их по тому же дренажу,
+    // и сторож агента не обгоняет его — у остановленного прогона есть файлы `LocalAgent`.
+    let stand = slow_stand().await;
+    let agent = start_agent_with(BTreeMap::new(), 10, Duration::from_millis(500)).await;
+    let req = request(Mode::Run, 1.0, &stand, vec![], env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        post_run(&agent, &req, SUITE).await.status(),
+        StatusCode::ACCEPTED
+    );
+    let first = read_sse(&agent, &req.run_id, None, 2).await;
+    let r = Client::new()
+        .post(format!("{}/v1/runs/{}/stop", agent.base, req.run_id))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let rest = read_sse(&agent, &req.run_id, first.last().unwrap().id, usize::MAX).await;
+    let done = rest.last().unwrap();
+    assert_eq!(done.event, "done");
+    assert!(done.data.contains("stopped"), "{}", done.data);
+    let r = get_files(&agent, &req.run_id).await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let names = tar_names(&r.bytes().await.unwrap());
+    for file in ["metrics.jsonl", "errors.jsonl", "hist.bin", "summary.yaml"] {
+        assert!(names.contains(&file.to_string()), "{file}: {names:?}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shutdown_waits_until_the_run_has_its_files() {
+    let stand = slow_stand().await;
+    let agent = start_agent_with(BTreeMap::new(), 10, Duration::from_millis(500)).await;
+    let req = request(Mode::Run, 1.0, &stand, vec![], env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        post_run(&agent, &req, SUITE).await.status(),
+        StatusCode::ACCEPTED
+    );
+    read_sse(&agent, &req.run_id, None, 2).await;
+    agent.state.shutdown().await;
+    assert_eq!(
+        agent.state.busy(),
+        None,
+        "shutdown waited for the run to finish"
+    );
+    let dir = agent.state.run_dir(&req.run_id).unwrap();
+    assert!(dir.join("metrics.jsonl").is_file());
+    assert!(dir.join("hist.bin").is_file());
+    let summary = std::fs::read_to_string(dir.join("summary.yaml")).unwrap();
+    assert!(summary.contains("stopped"), "{summary}");
+    // без прогона выключение сразу возвращается
+    tokio::time::timeout(Duration::from_secs(1), agent.state.shutdown())
+        .await
+        .unwrap();
 }
