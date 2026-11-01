@@ -140,7 +140,7 @@
     "trademarks": "Apache Kafka is a trademark of the Apache Software Foundation. Other product names are trademarks of their respective owners. This project is not affiliated with them.",
     "agent": {
       "title": "Load agent",
-      "hint": "Install the load agent on a load machine with the same operating system and processor; other platforms, the token and running it as a service are in the guide (F1, Agents and stands) and docs/admin.md."
+      "hint": "Install the load agent on a load machine with the same operating system and processor; other platforms, the token and running it as a service are in the guide (F1, Agents and stands) and in https://github.com/vvnovg/glafira-load/blob/main/docs/admin.md."
     },
     "updates": {
       "title": "Updates",

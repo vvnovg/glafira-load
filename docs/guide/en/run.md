@@ -59,7 +59,8 @@ the `.gitignore` that Glafira writes when it creates a project:
 | `agents/<id>/` | the raw files of every agent: `metrics.jsonl`, `errors.jsonl`, `summary.yaml`, `hist.bin`, and from an agent on a load machine also `agent.log` and `run.json` |
 
 Percentiles of the summary are computed from the merged HDR histograms of the agents (`hist.bin`), not averaged.
-`summary.yaml` and `run.yaml` are sorted and stable: commit them when you want to keep the result.
+`summary.yaml` and `run.yaml` are sorted and stable. The `runs/` folder is git-ignored in a new project, so to keep a
+result in git add its files with `git add -f runs/<folder>/summary.yaml runs/<folder>/run.yaml`, or copy the folder out.
 
 [[ui:run.past.title]] lists the folders of `runs/` with their start, suite, profile, stand, mode and status; choosing
 one shows its summary. A run without an end is marked [[ui:run.past.inProgress]] and is completed from the agents when

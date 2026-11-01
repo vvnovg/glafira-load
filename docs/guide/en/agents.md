@@ -23,8 +23,9 @@ glafira-load agent --listen 0.0.0.0:7420 --token-file ~/.glafira-load/token \
 The agent keeps its state in memory and in `--work` (by default the folder `glafira-load-agent` in the temporary
 folder of the system): bundles and files of past runs, of which the newest `--keep-runs` are kept (10 by default).
 `--drain-ms` is how long running iterations may finish after a stop (5000 by default). One agent executes one run at
-a time; `Ctrl+C` stops its current run and then the agent. Running the agent as a system service (systemd, launchd,
-Windows service) is described in the administrator guide in the repository (`docs/admin.md`).
+a time; `Ctrl+C` (SIGINT) or SIGTERM stops its current run and then the agent. Running the agent as a system service
+(systemd, launchd, Windows service) is described in the
+[administrator guide](https://github.com/vvnovg/glafira-load/blob/main/docs/admin.md) (`docs/admin.md` in the repository).
 
 The versions of the application and the agent must match in the major and minor numbers (`0.2`), and the `format` of
 the suite must be known to the agent; otherwise the run does not start with the error `AGENT_VERSION`, and the row of

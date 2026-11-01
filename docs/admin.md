@@ -26,14 +26,18 @@ CLI `glafira-load` — один статический бинарник на п�
 Установка (Linux; на macOS — файл `glafira-load-macos-<arch>` и `shasum -a 256 -c` вместо `sha256sum -c`):
 ```bash
 V=0.2.0
-sudo curl -L "https://github.com/vvnovg/glafira-load-releases/releases/download/v$V/glafira-load-linux-x86_64" -o /usr/local/bin/glafira-load
-curl -L "https://github.com/vvnovg/glafira-load-releases/releases/download/v$V/glafira-load-linux-x86_64.sha256" | sed 's#  .*#  /usr/local/bin/glafira-load#' | sha256sum -c -
+sudo install -d /usr/local/bin
+sudo curl -fL "https://github.com/vvnovg/glafira-load-releases/releases/download/v$V/glafira-load-linux-x86_64" -o /usr/local/bin/glafira-load
+curl -fL "https://github.com/vvnovg/glafira-load-releases/releases/download/v$V/glafira-load-linux-x86_64.sha256" | sed 's#  .*#  /usr/local/bin/glafira-load#' | sha256sum -c -
 sudo chmod +x /usr/local/bin/glafira-load
 glafira-load --version
 ```
 На macOS бинарник не подписан: если он скачан браузером, снимите карантин —
-`xattr -d com.apple.quarantine /usr/local/bin/glafira-load` (`curl` атрибут карантина не ставит). Windows:
-`curl.exe -L "https://github.com/vvnovg/glafira-load-releases/releases/download/v0.2.0/glafira-load-windows-x86_64.exe" -o C:\glafira-load\glafira-load.exe`.
+`xattr -d com.apple.quarantine /usr/local/bin/glafira-load` (`curl` атрибут карантина не ставит). Ключ `-f` нужен,
+чтобы при 404 (в релизе нет такого файла) `curl` завершился с ошибкой, а не сохранил страницу ошибки как бинарник;
+`sudo` — потому что `/usr/local/bin` принадлежит `root` (без `sudo` положите файл в свою папку из `PATH`, например
+`~/.local/bin`). Windows (PowerShell; `--create-dirs` создаёт папку `C:\glafira-load`):
+`curl.exe -fL "https://github.com/vvnovg/glafira-load-releases/releases/download/v0.2.0/glafira-load-windows-x86_64.exe" --create-dirs -o C:\glafira-load\glafira-load.exe`.
 
 Агент слушает TCP-порт (в примерах `7420`) и принимает запросы контроллера с заголовком
 `Authorization: Bearer <токен>`; запрос с другим токеном получает 401. TLS у агента нет — порт открывают только
@@ -51,9 +55,10 @@ glafira-load --version
 
 Сетевые соединения агента: входящие от контроллера; исходящие — к сервисам стенда (HTTP, Kafka, Schema Registry) по
 адресам из манифеста проекта. Журнал агента — stderr (журнал службы) и `agent.log` в папке прогона внутри `--work`;
-контроллер забирает `agent.log` вместе с остальными файлами прогона. Агент завершается по `Ctrl+C` (SIGINT): сначала
-останавливает текущий прогон с доработкой `--drain-ms`, затем сервер. Другие сигналы завершают процесс сразу — идущий
-прогон тогда обрывается, и контроллер помечает его `incomplete`.
+контроллер забирает `agent.log` вместе с остальными файлами прогона. Агент завершается по `Ctrl+C` (SIGINT) и,
+на Linux и macOS, по SIGTERM (сигнал по умолчанию у systemd и launchd): сначала останавливает текущий прогон с
+доработкой `--drain-ms`, затем сервер. Остальные способы (SIGKILL, `taskkill /f`, остановка службы Windows без
+Ctrl+C) завершают процесс сразу — идущий прогон тогда обрывается, и контроллер помечает его `incomplete`.
 
 ### systemd (Linux)
 `/etc/glafira-load/agent.env` (владелец `root`, права `600`; systemd читает его до смены пользователя):
@@ -73,8 +78,7 @@ User=glafira-load
 Group=glafira-load
 EnvironmentFile=/etc/glafira-load/agent.env
 ExecStart=/usr/local/bin/glafira-load agent --listen 0.0.0.0:7420 --work /var/lib/glafira-load/agent --keep-runs 10 --drain-ms 5000
-# мягкая остановка: SIGINT — как Ctrl+C, прогон дорабатывает --drain-ms
-KillSignal=SIGINT
+# systemd останавливает службу по SIGTERM: агент дорабатывает идущий прогон --drain-ms; TimeoutStopSec больше него
 TimeoutStopSec=30
 Restart=on-failure
 RestartSec=5
@@ -134,25 +138,84 @@ sudo launchctl bootstrap system /Library/LaunchDaemons/io.github.vvnovg.glafira.
 sudo launchctl print system/io.github.vvnovg.glafira.load.agent | head
 ```
 Токен для приложения — содержимое `/usr/local/etc/glafira-load/token`. Остановить:
-`sudo launchctl bootout system/io.github.vvnovg.glafira.load.agent` (launchd шлёт SIGTERM — останавливайте службу между
-прогонами).
+`sudo launchctl bootout system/io.github.vvnovg.glafira.load.agent` (launchd шлёт SIGTERM: агент останавливает идущий
+прогон, как по Ctrl+C, а если не завершился за `ExitTimeOut` — 20 секунд по умолчанию — launchd посылает SIGKILL;
+`--drain-ms` держите заметно меньше). Прогон остановленной службы получает статус `stopped`.
 
 ### Служба Windows
-`sc create` запускает только программы, которые умеют говорить с диспетчером служб; `glafira-load.exe` — обычная
-консольная программа, поэтому служба создаётся через `cmd /c` с перенаправлением, а токен и секреты задаются
-переменными окружения машины (PowerShell от администратора):
+Не проверено на Windows: команды ниже собраны по документации WinSW и NSSM, перед боевым использованием проверьте их на
+тестовой машине (запуск, `sc.exe stop` во время прогона, перезапуск после падения).
+
+`sc create` сам по себе не запускает обычную консольную программу: служба должна отвечать диспетчеру служб (SCM), а
+`glafira-load.exe` этого не умеет, поэтому `sc create GlafiraLoadAgent binPath= "…\glafira-load.exe agent …"`, как и
+запуск через `cmd.exe /c`, кончается ошибкой 1053 через 30 секунд, а уже стартовавший процесс остаётся сиротой, который
+нельзя остановить службой. Нужна служба-обёртка, которая запускает агент как дочерний процесс, перезапускает его и при
+остановке должна посылать ему `Ctrl+C` (мягкая остановка прогона), а не сразу завершать процесс. Ниже — WinSW
+(основной вариант), NSSM и планировщик заданий без обёртки.
+
+Общая подготовка (PowerShell от администратора; `glafira-load.exe` — в `C:\glafira-load`, см. «Установка»):
 ```powershell
-New-Item -ItemType Directory -Force C:\glafira-load\agent | Out-Null
-[Environment]::SetEnvironmentVariable("GLAFIRA_LOAD_AGENT_TOKEN", "замените-на-случайную-строку", "Machine")
-[Environment]::SetEnvironmentVariable("GLAFIRA_LOAD_SECRET_API_TOKEN", "значение-секрета-стенда", "Machine")
-sc.exe create GlafiraLoadAgent binPath= "cmd.exe /c \"C:\glafira-load\glafira-load.exe agent --listen 0.0.0.0:7420 --work C:\glafira-load\agent --keep-runs 10 --drain-ms 5000 >> C:\glafira-load\agent.log 2>&1\"" start= auto DisplayName= "Glafira for Load Testing agent"
-sc.exe start GlafiraLoadAgent
+New-Item -ItemType Directory -Force C:\glafira-load\agent, C:\glafira-load\logs | Out-Null
 netsh advfirewall firewall add rule name="Glafira load agent" dir=in action=allow protocol=TCP localport=7420
 ```
-Так остановка службы завершает `cmd.exe`, а не агента, и идущий прогон не получает мягкой остановки; для продуктивных
-машин нагрузки надёжнее планировщик заданий (`schtasks /create /sc onstart /ru SYSTEM …`) или обёртка-служба
-(например, `nssm`), которая перезапускает процесс и передаёт ему завершение. Переменные уровня машины видны всем
-процессам: секреты стенда на Windows лучше хранить в учётной записи службы (`/ru`) с ограниченным доступом.
+
+**WinSW.** Скачайте `WinSW-x64.exe` из релизов https://github.com/winsw/winsw/releases и положите как
+`C:\glafira-load\glafira-load-agent.exe`; рядом создайте `C:\glafira-load\glafira-load-agent.xml` (имя файла
+совпадает с именем exe):
+```xml
+<service>
+  <id>GlafiraLoadAgent</id>
+  <name>Glafira for Load Testing agent</name>
+  <description>Агент нагрузки Glafira for Load Testing</description>
+  <executable>C:\glafira-load\glafira-load.exe</executable>
+  <arguments>agent --listen 0.0.0.0:7420 --work C:\glafira-load\agent --keep-runs 10 --drain-ms 5000</arguments>
+  <env name="GLAFIRA_LOAD_AGENT_TOKEN" value="замените-на-случайную-строку"/>
+  <env name="GLAFIRA_LOAD_SECRET_API_TOKEN" value="значение-секрета-стенда"/>
+  <startmode>Automatic</startmode>
+  <onfailure action="restart" delay="5 sec"/>
+  <stoptimeout>30 sec</stoptimeout>
+  <logpath>C:\glafira-load\logs</logpath>
+  <log mode="roll-by-size"/>
+</service>
+```
+```powershell
+# в XML токен и секреты стенда: оставьте доступ только SYSTEM и администраторам
+icacls C:\glafira-load\glafira-load-agent.xml /inheritance:r /grant:r "SYSTEM:(R)" "Administrators:(F)"
+C:\glafira-load\glafira-load-agent.exe install       # то же, что sc.exe create GlafiraLoadAgent binPath= C:\glafira-load\glafira-load-agent.exe start= auto
+sc.exe start GlafiraLoadAgent
+sc.exe query GlafiraLoadAgent
+```
+Журнал агента (stderr) WinSW пишет в `C:\glafira-load\logs`. `<stoptimeout>` — сколько WinSW ждёт агента после
+команды остановки, прежде чем завершить его принудительно; держите его больше `--drain-ms`.
+
+**NSSM** (`nssm.exe` из https://nssm.cc в `PATH`):
+```powershell
+nssm install GlafiraLoadAgent C:\glafira-load\glafira-load.exe agent --listen 0.0.0.0:7420 --work C:\glafira-load\agent --keep-runs 10 --drain-ms 5000
+nssm set GlafiraLoadAgent AppEnvironmentExtra GLAFIRA_LOAD_AGENT_TOKEN=замените-на-случайную-строку GLAFIRA_LOAD_SECRET_API_TOKEN=значение-секрета-стенда
+nssm set GlafiraLoadAgent AppStdout C:\glafira-load\logs\agent.log
+nssm set GlafiraLoadAgent AppStderr C:\glafira-load\logs\agent.log
+nssm set GlafiraLoadAgent AppStopMethodConsole 30000   # мс ожидания после Ctrl+C
+nssm set GlafiraLoadAgent AppRestartDelay 5000
+nssm start GlafiraLoadAgent
+```
+Переменные NSSM хранит в реестре (`HKLM\SYSTEM\CurrentControlSet\Services\GlafiraLoadAgent\Parameters`), доступном
+администраторам.
+
+**Планировщик заданий (без обёртки).** Задание запускает обычный процесс при старте машины; перезапуска после падения
+нет, а `schtasks /end` завершает агента сразу, без мягкой остановки — идущий прогон будет помечен `incomplete`.
+Создайте `C:\glafira-load\run-agent.cmd` (токен и секреты — в нём, доступ к файлу ограничьте, как для XML выше):
+```bat
+@echo off
+set GLAFIRA_LOAD_AGENT_TOKEN=замените-на-случайную-строку
+set GLAFIRA_LOAD_SECRET_API_TOKEN=значение-секрета-стенда
+C:\glafira-load\glafira-load.exe agent --listen 0.0.0.0:7420 --work C:\glafira-load\agent --keep-runs 10 --drain-ms 5000 >> C:\glafira-load\logs\agent.log 2>&1
+```
+```powershell
+schtasks /create /tn GlafiraLoadAgent /sc onstart /ru SYSTEM /rl HIGHEST /tr C:\glafira-load\run-agent.cmd
+schtasks /run /tn GlafiraLoadAgent
+```
+Не задавайте токен и секреты переменными окружения уровня машины (`[Environment]::SetEnvironmentVariable(…, "Machine")`):
+они видны всем процессам и пользователям машины.
 
 ## Политика
 Приложение читает политику при запуске. Пользователь не может её изменить.
@@ -189,7 +252,8 @@ plutil -p "/Library/Managed Preferences/io.github.vvnovg.glafira.load.plist"
 ## Сеть
 Приложение подключается только к серверу обновлений, если обновления не выключены: `github.com` и хосты, куда GitHub
 перенаправляет загрузку ассетов релизов (`release-assets.githubusercontent.com`, `objects.githubusercontent.com`), —
-или к хосту из `updateUrl`. Сборки 0.1.0 сделаны без ключа обновлений и к серверу обновлений не обращаются вовсе.
+или к хосту из `updateUrl`. Все сборки до этапа L7 (0.1.0, 0.2.0) сделаны без ключа обновлений и к серверу обновлений не обращаются вовсе; проверка
+обновлений и подпись установщиков появятся на этапе L7.
 
 С версии 0.2.0 приложение подключается к агентам нагрузки по адресам из манифеста проекта
 (`environments[].agents[].url`, HTTP внутри сети стенда или HTTPS за обратным прокси), а смок и прогон на стенде без
