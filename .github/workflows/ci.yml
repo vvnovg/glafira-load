@@ -38,12 +38,13 @@ jobs:
         with:
           workspaces: |
             . -> target
-      # cmake — для librdkafka (rdkafka-sys собирает её из исходников); OpenSSL встроен (ssl-vendored),
-      # libssl-dev и libsasl2-dev не нужны.
+      # cmake — для librdkafka (rdkafka-sys собирает её из исходников); OpenSSL встроен (ssl-vendored).
+      # libcurl4-openssl-dev: CMake librdkafka включает curl, если находит libcurl, и без заголовков сборка
+      # падает на curl/curl.h; libsasl2-dev и libsecret-1-dev — как в соседнем проекте Glafira for Kafka.
       - name: Системные зависимости Tauri и librdkafka
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf cmake
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf cmake libcurl4-openssl-dev libsasl2-dev libsecret-1-dev
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
       - run: pnpm test:scripts

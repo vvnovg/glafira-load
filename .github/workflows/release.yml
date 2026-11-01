@@ -63,7 +63,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf cmake
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf cmake libcurl4-openssl-dev libsasl2-dev libsecret-1-dev
       - run: pnpm install --frozen-lockfile
       # По тегу tauri-action создаёт черновик релиза (или дополняет уже созданный другой платформой)
       # и прикладывает установщики; вручную tagName пуст — только сборка.
@@ -138,6 +138,8 @@ jobs:
           toolchain: stable
           targets: ${{ matrix.target }}
       # Без кэшей — как в build: релиз собирается с нуля из lock-файла.
+      # Не проверено до первого релизного запуска: в образах cross нет libcurl, а glibc-libcurl в musl-бинарник
+      # не слинковать, поэтому для musl в Cargo.toml движка включён curl-static (curl собирается из исходников).
       - name: cross (Linux musl)
         if: matrix.cross
         run: cargo install cross --locked --version 0.2.5

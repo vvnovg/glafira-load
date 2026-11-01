@@ -33,6 +33,12 @@ futures = "0.3"
 tokio-stream = "0.1"
 eventsource-stream = "0.2"
 
+# musl (CLI через cross): в образах нет libcurl, а glibc-версия в musl-бинарник не слинкуется, поэтому
+# librdkafka получает статически собранный curl. Признаки объединяются с основным объявлением rdkafka.
+# Не проверено: на arm64 Mac musl-сборка недоступна, выяснится при первом релизном запуске.
+[target.'cfg(target_env = "musl")'.dependencies]
+rdkafka = { version = "0.37", features = ["curl-static"] }
+
 [dev-dependencies]
 axum = { version = "0.8", features = ["multipart"] }
 tempfile = "3"
