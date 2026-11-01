@@ -615,7 +615,17 @@ mod tests {
         drop(free);
         let ex = executor(&format!("http://{addr}"));
         let e = ex.execute(&get_step("/x"), &mut ctx).await.unwrap_err();
-        assert_eq!(e.code, StepCode::Connect);
+        // На Windows подключение к закрытому порту не отклоняется сразу, а висит до таймаута запроса
+        // (так ведёт себя раннер GitHub), поэтому ошибка классифицируется как Timeout.
+        if cfg!(windows) {
+            assert!(
+                matches!(e.code, StepCode::Connect | StepCode::Timeout),
+                "{:?}",
+                e.code
+            );
+        } else {
+            assert_eq!(e.code, StepCode::Connect);
+        }
     }
 
     #[tokio::test]
@@ -842,8 +852,20 @@ mod tests {
             .execute(&tricky_step("/v1/fail/{id}"), &mut ctx)
             .await
             .unwrap_err();
-        assert_eq!(e.code, StepCode::Connect);
-        assert!(e.message.contains("***"), "{}", e.message);
+        // Windows: подключение к закрытому порту висит до таймаута и даёт Timeout; его сообщение
+        // не содержит URL, поэтому маскировать нечего.
+        if cfg!(windows) {
+            assert!(
+                matches!(e.code, StepCode::Connect | StepCode::Timeout),
+                "{:?}",
+                e.code
+            );
+        } else {
+            assert_eq!(e.code, StepCode::Connect);
+        }
+        if e.code == StepCode::Connect {
+            assert!(e.message.contains("***"), "{}", e.message);
+        }
         assert_no_secret(&e.message);
         assert_no_secret(&e.request.unwrap());
     }
