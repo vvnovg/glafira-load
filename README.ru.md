@@ -2,7 +2,8 @@
 
 Бесплатный настольный инструмент с открытым кодом для подготовки и сопровождения нагрузочного тестирования на macOS,
 Windows и Linux (Tauri 2 + Rust + React). Он строит реестр операций по контрактам сервисов, выгружает шаблон нагрузки
-ПРОМ в Excel, импортирует заполненный шаблон и считает профиль нагрузки. CLI-раннер, сьюты, моки и отчёты появятся в
+ПРОМ в Excel, импортирует заполненный шаблон и считает профиль нагрузки. Он же исполняет нагрузку: сьюты в YAML, CLI
+`glafira-load` с агентами на машинах нагрузки, живые графики и папка прогона. Моки и отчёты в приложении появятся в
 следующих этапах.
 
 [English version](README.md)
@@ -10,15 +11,22 @@ Windows и Linux (Tauri 2 + Rust + React). Он строит реестр опе
 Apache Kafka — товарный знак Apache Software Foundation. Остальные названия продуктов — товарные знаки их владельцев.
 Проект с ними не связан.
 
-Спецификации: концепция `docs/superpowers/specs/2026-10-31-glafira-load-concept-design.md` и этап L1
-`docs/superpowers/specs/2026-10-31-glafira-load-l1-design.md`.
+Спецификации: концепция `docs/superpowers/specs/2026-10-31-glafira-load-concept-design.md`, этап L1
+`docs/superpowers/specs/2026-10-31-glafira-load-l1-design.md` и этап L2
+`docs/superpowers/specs/2026-11-01-glafira-load-l2-design.md`.
 
 ## Установка
 
 Установщики для macOS (`.dmg`), Windows (`.msi`) и Linux (`.deb`, `.rpm`, `.AppImage`):
 https://github.com/vvnovg/glafira-load-releases/releases
 
-Версия 0.1.0 пока не подписана, а обновления изнутри приложения появятся на этапе L7: до тех пор устанавливайте новые
+CLI `glafira-load` (проверки, смок, прогоны, агент нагрузки) публикуется в том же релизе одним статическим бинарником на
+платформу: `glafira-load-linux-x86_64`, `glafira-load-linux-aarch64`, `glafira-load-macos-aarch64`,
+`glafira-load-macos-x86_64`, `glafira-load-windows-x86_64.exe`, у каждого — файл `.sha256`. Положите его в `PATH`; экран
+«О программе» показывает команду скачивания для вашей платформы, а [`docs/admin.md`](docs/admin.md) — запуск агента
+службой.
+
+Версия 0.2.0 пока не подписана, а обновления изнутри приложения появятся на этапе L7: до тех пор устанавливайте новые
 версии со страницы релизов. Для версии клонов сервисов приложению нужен системный `git`.
 
 Руководство пользователя на русском и английском: [Русский](docs/guide/ru/getting-started.md),
@@ -37,6 +45,11 @@ https://github.com/vvnovg/glafira-load-releases/releases
   записи; ошибочные строки блокируют импорт. Каждый импортированный файл хранится рядом с цифрами.
 - **Профиль нагрузки с графиком.** Коэффициенты стенда и роста с переопределениями по сервисам и операциям, профили из
   фаз разгона, полки и ступеней, цели и доли операций, операции без цифр и график фаз.
+- **Сьюты, агенты и прогоны.** Сьют — YAML рядом с проектом: сценарии из шагов HTTP и Kafka, привязанных к операциям
+  реестра, проверки, извлечённые значения, файлы данных и выражения; `glafira-load check` находит ошибки без сети.
+  Приложение или `glafira-load run --agents` отправляет сьют и долю профиля агентам стенда, сводит их посекундные
+  метрики в живые графики и пишет `runs/<дата>/` с итогом из слитых HDR-гистограмм; `glafira-load run` без агентов —
+  для CI.
 - **Всё в git.** Проект НТ — папка читаемых YAML-файлов (манифест, реестр, снимки разборов, цифры ПРОМ, профиль),
   которую вы коммитите рядом с тестами; клоны сервисов приложение только читает.
 
@@ -45,7 +58,7 @@ https://github.com/vvnovg/glafira-load-releases/releases
 | Этап | Содержимое | Состояние |
 |---|---|---|
 | L1. Каркас и реестр операций | Проект, сервисы и стенды; импортёры контрактов и сканер Spring; реестр с диффом; Excel-шаблон и импорт; профиль нагрузки с графиком фаз | готов (0.1.0) |
-| L2. Раннер и сьют | Формат сьюта, `glafira-load check/run/smoke/report`, генераторы HTTP и Kafka, метрики, HTML-отчёт, секреты стендов; L2b — gRPC и SQL | впереди |
+| L2. Сьют, агенты и прогон | Формат сьюта, `glafira-load check/smoke/run/agent`, нагрузка HTTP и Kafka, агенты с весами и токенами, живые графики и файлы прогона; L2b — gRPC и SQL | готов (0.2.0) |
 | L3. Отчёты в приложении | Импорт прогонов, история, графики, сравнение, SLA и вердикт, экспорт | впереди |
 | L4. Моки | `glafira-load mock`: HTTP, gRPC, Kafka, состояние, запись и воспроизведение | впереди |
 | L5. MCP-шлюз | Инструменты чтения для LLM-ассистентов, предложения сценариев и правок, логи стенда с маскированием | впереди |
@@ -59,6 +72,8 @@ https://github.com/vvnovg/glafira-load-releases/releases
   (`libwebkit2gtk-4.1-dev`, `libappindicator3-dev`, `librsvg2-dev`, `patchelf`)
 - Node 22+, pnpm 11
 - `git` в `PATH`
+- `cmake` (librdkafka собирается из исходников крейтом `rdkafka-sys`); на Windows — Perl для встроенного OpenSSL
+  (Strawberry Perl)
 
 Запуск:
 ```bash
@@ -72,15 +87,25 @@ pnpm tauri dev      # dev-сервер Vite слушает порт 1450
 pnpm test               # фронтенд
 pnpm test:scripts       # скрипты scripts/*.mjs
 pnpm i18n:check         # словари, ключи из Rust, руководство
-cargo test --workspace  # Rust: приложение и крейты glafira-load-{model,contracts,xlsx}
+cargo test --workspace  # Rust: приложение и крейты glafira-load-{model,contracts,xlsx,engine,cli}
 cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings
+node scripts/check-version.mjs  # одна версия в package.json, tauri.conf.json и всех Cargo.toml
 ```
+Тесты Kafka крейта `glafira-load-engine` помечены `#[ignore]` и требуют Docker: Redpanda
+(`redpandadata/redpanda:v24.2.7`) они поднимают сами через testcontainers —
+`cargo test -p glafira-load-engine --test kafka -- --ignored`. Бинарник CLI: `cargo build -p glafira-load-cli --release`
+→ `target/release/glafira-load`. Заглушка сервиса `orders` для ручной проверки прогонов —
+`python3 dev/stub/orders_stub.py 8080`; список ручной приёмки этапа L2 — `dev/acceptance/l2.md`.
 Логи: `RUST_LOG=debug pnpm tauri dev`; файлы — в папке логов ОС (путь — в «О программе»).
 
 ### Устройство
 - Cargo workspace: `src-tauri/` — приложение (команды IPC, проект, разбор, шаблон и профиль), `crates/` — крейты без
   Tauri: `glafira-load-model` (модель проекта, реестр, слияние, дифф, профиль), `glafira-load-contracts` (импортёры
   контрактов — чистые функции, без сети и диска), `glafira-load-xlsx` (выгрузка и чтение шаблона).
+- Движок и CLI (`crates/glafira-load-engine`, `crates/glafira-load-cli`): планировщик открытого цикла, исполнители HTTP
+  и Kafka, метрики HDR, контроллер агентов; бинарник `glafira-load` с командами `check`, `smoke`, `run`, `agent`.
+  Приложение (`src-tauri/src/{suites,agents,runs}/`) оборачивает контроллер в команды с `Channel` событий и хранит
+  токены агентов в `keyring`.
 - Проект НТ (`src-tauri/src/project/`): манифест `glafira-load.yaml`, атомарная запись, проверка границ проекта и клонов.
   Неизвестные поля манифеста сохраняются при перезаписи.
 - Разбор (`src-tauri/src/scan/`): поиск контрактов по маскам, версия клона через `git describe --tags --always --dirty`
@@ -94,7 +119,8 @@ cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings
   `~/Library/Application Support/io.github.vvnovg.glafira.load/`): язык интерфейса и список открытых проектов.
 - Проекты НТ — там, где их создали: обычно папка в git-репозитории команды. Приложение их не копирует.
 - Клоны сервисов приложение только читает.
-- Секретов в L1 нет: у стендов только адреса без паролей.
+- Токены агентов — в системном хранилище секретов, секреты стендов — только в окружении агентов; результаты прогонов —
+  `runs/` в папке проекта.
 
 ## Политика администратора
 Ключи `updatesEnabled`, `updateUrl`, `language`; где задаются и как действуют — [`docs/admin.md`](docs/admin.md),
