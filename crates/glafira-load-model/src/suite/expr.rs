@@ -708,24 +708,27 @@ pub(crate) mod tests {
             "../../../../dev/fixtures/suites/orders/suite.yaml"
         ))
         .unwrap();
-        let found: Vec<String> = templates_of(&suite)
+        let mut found: Vec<String> = templates_of(&suite)
             .iter()
             .map(|(p, s)| format!("{} = {s}", crate::suite::lines::path_string(p)))
             .collect();
-        assert_eq!(
-            found,
-            vec![
-                "scenarios[0].steps[0].http.headers.Authorization = Bearer {{secret API_TOKEN}}",
-                "scenarios[0].steps[0].http.body.customerId = {{users.id}}",
-                "scenarios[0].steps[0].http.body.items[0].qty = {{int 1 5}}",
-                "scenarios[0].steps[0].http.body.items[0].sku = {{pick skus.sku}}",
-                "scenarios[0].steps[1].http.path.id = {{steps.create.order_id}}",
-                "scenarios[0].steps[2].kafka_consume.match.key = {{steps.create.order_id}}",
-                "scenarios[0].steps[3].kafka_produce.key = {{steps.create.order_id}}",
-                "scenarios[0].steps[3].kafka_produce.value.orderId = {{steps.create.order_id}}",
-                "scenarios[0].steps[3].kafka_produce.value.paidAt = {{now iso}}",
-            ]
-        );
+        // Порядок ключей JSON-тела зависит от фичи serde_json/preserve_order
+        // (в workspace её включает glafira-load-contracts), поэтому сравниваем
+        // отсортированные списки: состав и количество записей проверяются полностью.
+        found.sort();
+        let mut expected = vec![
+            "scenarios[0].steps[0].http.headers.Authorization = Bearer {{secret API_TOKEN}}",
+            "scenarios[0].steps[0].http.body.customerId = {{users.id}}",
+            "scenarios[0].steps[0].http.body.items[0].qty = {{int 1 5}}",
+            "scenarios[0].steps[0].http.body.items[0].sku = {{pick skus.sku}}",
+            "scenarios[0].steps[1].http.path.id = {{steps.create.order_id}}",
+            "scenarios[0].steps[2].kafka_consume.match.key = {{steps.create.order_id}}",
+            "scenarios[0].steps[3].kafka_produce.key = {{steps.create.order_id}}",
+            "scenarios[0].steps[3].kafka_produce.value.orderId = {{steps.create.order_id}}",
+            "scenarios[0].steps[3].kafka_produce.value.paidAt = {{now iso}}",
+        ];
+        expected.sort();
+        assert_eq!(found, expected);
         let mut s2 = suite.clone();
         s2.defaults
             .http
