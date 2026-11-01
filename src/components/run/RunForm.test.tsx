@@ -1,7 +1,7 @@
 import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
-import type { CheckReport, Environment } from "../../api/types";
+import type { CheckReport, Environment, ProfileFile } from "../../api/types";
 import { emptyRun, useRunStore } from "../../state/run";
 import { renderWithClient } from "../../test/render";
 import { RunForm } from "./RunForm";
@@ -14,7 +14,7 @@ const { api, envs } = vi.hoisted(() => {
     api: {
       projectView: vi.fn(async () => ({ path: "/p", manifest: { format: 1, name: "P", services: [], environments: envs.list }, problems: [], readOnly: false, missingServices: [] })),
       suiteList: vi.fn(async () => [{ name: "orders", file: "suites/orders/suite.yaml", scenarios: 1 }]),
-      profileGet: vi.fn(async () => ({ format: 1, coefficients: { k_env: 1, k_growth: 1, overrides: {} }, profiles: { nominal: { basis: "avg", phases: [{ kind: "steady", minutes: 10 }] } } })),
+      profileGet: vi.fn(async (): Promise<ProfileFile> => ({ format: 1, coefficients: { k_env: 1, k_growth: 1, overrides: {} }, profiles: { nominal: { basis: "avg", phases: [{ kind: "steady", minutes: 10 }] } } })),
       profileCompute: vi.fn(async () => ({ profile: "nominal", basis: "avg", targets: [], total: 100, uncovered: [], timeline: [{ minute: 0, pct: 100 }, { minute: 10, pct: 100 }], total_minutes: 10 })),
       suiteCheck: vi.fn(async (): Promise<CheckReport> => ({ findings: [], coverage: null, profile: "nominal" })),
       agentProbe: vi.fn(async () => [{ id: "gen-1", url: "http://10.0.1.11:7420", state: "ready", info: { version: "0.2.0", os: "linux", arch: "x86_64", cpus: 4, busy: null }, message: null }]),
@@ -83,6 +83,19 @@ describe("RunForm", () => {
     expect(screen.getByText("Смок идёт внутри приложения: агенты стенда не используются")).toBeInTheDocument();
     await userEvent.click(start);
     await waitFor(() => expect(api.runStart).toHaveBeenCalledWith("/p", "orders", "nominal", "test", "smoke", null, expect.any(Function)));
+  });
+
+  it("starts a smoke run in a project without profiles", async () => {
+    api.profileGet.mockResolvedValueOnce({ format: 1, coefficients: { k_env: 1, k_growth: 1, overrides: {} }, profiles: {} });
+    renderWithClient(<RunForm path="/p" />);
+    const start = screen.getByRole("button", { name: "Запустить" });
+    await waitFor(() => expect(screen.getByLabelText("Стенд")).toHaveValue("test"));
+    expect(start).toBeDisabled();
+    await userEvent.selectOptions(screen.getByLabelText("Режим"), "smoke");
+    expect(start).toBeEnabled();
+    await userEvent.click(start);
+    await waitFor(() => expect(api.runStart).toHaveBeenCalledWith("/p", "orders", "", "test", "smoke", null, expect.any(Function)));
+    expect(api.profileCompute).not.toHaveBeenCalled();
   });
 
   it("blocks Start while the check reports errors and unblocks after a clean recheck", async () => {

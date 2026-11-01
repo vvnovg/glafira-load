@@ -72,7 +72,8 @@ export function RunForm({ path }: { path: string }) {
   const maxInvalid = maxInFlight !== undefined && !(Number.isInteger(maxInFlight) && maxInFlight >= 1 && maxInFlight <= MAX_IN_FLIGHT);
   const envs = project.data?.manifest.environments ?? [];
   const selectedEnv = envs.find((e) => e.id === env);
-  const canStart = !active && !busy && !blocked && !!suite && !!profile && !!env && !maxInvalid && !launch.isPending;
+  // Смок профиль не использует (бэкенд передаёт ему пустой) — проект без профилей смок запустить может.
+  const canStart = !active && !busy && !blocked && !!suite && (mode === "smoke" || !!profile) && !!env && !maxInvalid && !launch.isPending;
   return (
     <section className="form stack run-form">
       <div className="row">

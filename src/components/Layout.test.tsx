@@ -15,10 +15,18 @@ vi.mock("../api/client", () => ({
     projectRecent: vi.fn(async () => []),
     suiteGet: vi.fn(async () => ({ name: "orders", file: "suites/orders/suite.yaml", text: "", suite: null, findings: [], lines: {} })),
     suiteCheck: vi.fn(async () => ({ findings: [], coverage: null, profile: "nominal" })),
+    // Вкладка прогона: форма и прошлые прогоны.
+    projectView: vi.fn(async () => ({ path: "/home/u/orders-load", manifest: { format: 1, name: "P", services: [], environments: [] }, problems: [], readOnly: false, missingServices: [] })),
+    suiteList: vi.fn(async () => []),
+    profileGet: vi.fn(async () => ({ format: 1, coefficients: { k_env: 1, k_growth: 1, overrides: {} }, profiles: {} })),
+    runList: vi.fn(async () => []),
   },
   toAppError: (e: unknown) => e,
   isAppError: () => false,
 }));
+// Вкладка прогона тянет uPlot, которому в jsdom не хватает canvas и matchMedia.
+vi.mock("uplot", () => ({ default: class { setData() {} setSize() {} destroy() {} } }));
+vi.mock("uplot/dist/uPlot.min.css", () => ({}));
 // Запрос закрытия окна во время прогона приходит событием Tauri.
 const events = vi.hoisted(() => ({ handlers: new Map<string, () => void>() }));
 vi.mock("@tauri-apps/api/event", () => ({
@@ -48,7 +56,7 @@ describe("Layout", () => {
     act(() => useWorkspace.getState().open({ kind: "run", path: "/home/u/orders-load" }));
     expect(await screen.findByRole("tab", { name: "orders-load · orders" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "orders-load · Прогон" })).toBeInTheDocument();
-    expect(await screen.findByRole("heading", { name: "Прогон" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /^Прогон/ })).toBeInTheDocument();
   });
 
   it("asks what to do with the run when the window is closed, even without the run tab", async () => {
