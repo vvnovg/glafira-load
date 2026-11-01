@@ -1,5 +1,6 @@
 //! Команды CLI. Каждая возвращает `Exit`; текст ошибок запуска — в stderr.
 
+pub mod agent;
 pub mod check;
 pub mod run;
 pub mod smoke;

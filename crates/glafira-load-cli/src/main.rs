@@ -1,10 +1,11 @@
-//! Бинарник `glafira-load`: разбор аргументов и выбор команды (спека §5.4).
+//! Бинарник `glafira-load`: разбор аргументов и выбор команды (спека §5.4, §4.1).
 
 use std::path::PathBuf;
 
 use clap::error::ErrorKind;
 use clap::{Parser, Subcommand};
 use glafira_load_cli::cmd;
+use glafira_load_cli::cmd::agent::AgentArgs;
 use glafira_load_cli::cmd::run::RunArgs;
 use glafira_load_cli::cmd::smoke::SmokeArgs;
 use glafira_load_cli::exit::{Exit, OK, STARTUP};
@@ -62,6 +63,27 @@ enum Command {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// Serve as a load agent for a controller
+    Agent {
+        /// Address to listen on, e.g. 0.0.0.0:7420
+        #[arg(long)]
+        listen: String,
+        /// Bearer token; alternatively --token-file or GLAFIRA_LOAD_AGENT_TOKEN
+        #[arg(long)]
+        token: Option<String>,
+        /// File with the bearer token
+        #[arg(long = "token-file")]
+        token_file: Option<PathBuf>,
+        /// Folder for run bundles and files; default <temp>/glafira-load-agent
+        #[arg(long)]
+        work: Option<PathBuf>,
+        /// How many finished runs to keep on disk
+        #[arg(long = "keep-runs", default_value_t = 10)]
+        keep_runs: usize,
+        /// How long in-flight iterations may finish after stop
+        #[arg(long = "drain-ms", default_value_t = 5000)]
+        drain_ms: u64,
+    },
 }
 
 #[tokio::main]
@@ -114,6 +136,25 @@ async fn main() -> Exit {
                 suite,
                 max_in_flight,
                 out,
+            })
+            .await
+        }
+        // журнал агента ставит сама команда (stderr + `agent.log` прогона), `console_log` не нужен
+        Command::Agent {
+            listen,
+            token,
+            token_file,
+            work,
+            keep_runs,
+            drain_ms,
+        } => {
+            cmd::agent::agent(AgentArgs {
+                listen,
+                token,
+                token_file,
+                work,
+                keep_runs,
+                drain_ms,
             })
             .await
         }
