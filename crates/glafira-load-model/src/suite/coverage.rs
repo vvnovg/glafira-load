@@ -1,6 +1,6 @@
 //! Частоты сценариев и покрытие профиля сьютом (спека L2 §3.2, Global Constraints).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -24,7 +24,8 @@ pub struct CoverageRow {
 pub struct Coverage {
     /// Операции профиля в его порядке, затем операции шагов без цели по алфавиту.
     pub rows: Vec<CoverageRow>,
-    /// Операции с целью, но без шагов в сьюте.
+    /// Операции `active` с цифрами (есть в `Computed.targets`), у которых нет шагов
+    /// ни в одном сценарии сьюта (спека L2 §3.2). Недобор частоты виден в `delta`.
     pub uncovered: Vec<String>,
 }
 
@@ -58,12 +59,17 @@ pub fn scenario_rates(suite: &Suite, computed: &Computed) -> BTreeMap<String, f6
         .collect()
 }
 
+/// Покрытие профиля сьютом: строки по операциям и список `uncovered` — операции с целью
+/// (есть в `Computed.targets`), которых нет ни в одном шаге ни одного сценария.
 pub fn coverage(suite: &Suite, computed: &Computed) -> Coverage {
     let rates = scenario_rates(suite, computed);
     let mut planned: BTreeMap<&str, (OpKind, f64)> = BTreeMap::new();
+    // Операции, встречающиеся хотя бы в одном шаге любого сценария (независимо от частоты).
+    let mut with_steps: BTreeSet<&str> = BTreeSet::new();
     for sc in &suite.scenarios {
         let rate = rates.get(&sc.id).copied().unwrap_or(0.0);
         for step in &sc.steps {
+            with_steps.insert(step.action.operation());
             let e = planned
                 .entry(step.action.operation())
                 .or_insert((step.action.kind(), 0.0));
@@ -74,7 +80,7 @@ pub fn coverage(suite: &Suite, computed: &Computed) -> Coverage {
     let mut uncovered = Vec::new();
     for t in &computed.targets {
         let p = planned.remove(t.id.as_str()).map(|(_, p)| p).unwrap_or(0.0);
-        if p == 0.0 {
+        if !with_steps.contains(t.id.as_str()) {
             uncovered.push(t.id.clone());
         }
         rows.push(CoverageRow {
@@ -187,6 +193,52 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!((health.target, health.planned), (0.0, 0.0));
         assert_eq!(cov.rows.len(), 6);
+    }
+
+    /// Операция с целью, у которой есть шаг в сценарии с нулевой частотой (ведущая операция без
+    /// цели), не попадает в `uncovered`: planned == 0, но шаги в сьюте есть.
+    #[test]
+    fn operation_with_steps_in_zero_rate_scenario_is_not_uncovered() {
+        let mut suite = parse(&fixture("orders/suite.yaml")).unwrap();
+        let http = |op: &str| Step {
+            id: None,
+            action: Action::Http(HttpStep {
+                operation: op.into(),
+                path: Default::default(),
+                query: Default::default(),
+                headers: Default::default(),
+                body: None,
+                body_text: None,
+                timeout_ms: None,
+            }),
+            expect: Default::default(),
+            extract: Default::default(),
+        };
+        suite.scenarios = vec![Scenario {
+            id: "health-then-order".into(),
+            drives: None,
+            on_fail: Default::default(),
+            steps: vec![
+                http("http:orders:GET /v1/health"),
+                http("http:orders:POST /v1/orders"),
+            ],
+        }];
+        let c = computed("nominal");
+        assert_eq!(scenario_rates(&suite, &c)["health-then-order"], 0.0);
+        let cov = coverage(&suite, &c);
+        let post = cov
+            .rows
+            .iter()
+            .find(|r| r.id == "http:orders:POST /v1/orders")
+            .unwrap();
+        assert_eq!(post.planned, 0.0);
+        assert!(post.target > 0.0);
+        assert!(!cov.uncovered.contains(&post.id), "шаг в сьюте есть");
+        assert!(
+            cov.uncovered
+                .contains(&"http:orders:GET /v1/orders".to_string()),
+            "операция с целью и без шагов остаётся в uncovered"
+        );
     }
 
     /// Свойство: Σ planned по операциям = Σ по сценариям (частота × число шагов).
