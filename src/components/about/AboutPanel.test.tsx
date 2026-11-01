@@ -38,6 +38,8 @@ describe("AboutPanel", () => {
     expect(screen.getByText("Политика организации: updatesEnabled: недопустимое логическое 2")).toBeInTheDocument();
     expect(screen.getByText(/Apache Kafka — товарный знак/)).toBeInTheDocument();
     expect(screen.getByText("/data")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Агент нагрузки" })).toBeInTheDocument();
+    expect(screen.getByText(/glafira-load-macos-aarch64 -o \/usr\/local\/bin\/glafira-load/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Apache 2.0" }));
     expect(openUrl).toHaveBeenCalledWith(LICENSE_URL);
     await user.click(screen.getByRole("button", { name: "Поддержать проект" }));

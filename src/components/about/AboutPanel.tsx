@@ -7,6 +7,7 @@ import { tr } from "../../i18n/text";
 import { openLicense, openSupport } from "../../lib/links";
 import { ChunkBoundary } from "../common/ChunkBoundary";
 import { ErrorBanner } from "../common/ErrorBanner";
+import { agentInstallCommand } from "./agentInstall";
 
 // Заметки рисует react-markdown — отдельным чанком при первом показе, как справку.
 const ReleaseNotes = lazy(() => import("./ReleaseNotes").then((m) => ({ default: m.ReleaseNotes })));
@@ -58,6 +59,13 @@ export function AboutPanel() {
       <p className="muted">{t("about.dataDir")} <code>{i.dataDir}</code></p>
       <p className="muted">{t("about.logDir")} <code>{i.logDir}</code></p>
       <p className="muted">{t("about.trademarks")}</p>
+      <section className="panel">
+        <h3>{t("about.agent.title")}</h3>
+        <p className="muted">{t("about.agent.hint")}</p>
+        <pre>
+          <code>{agentInstallCommand(i)}</code>
+        </pre>
+      </section>
       <UpdatesSection />
     </div>
   );

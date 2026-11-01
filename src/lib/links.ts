@@ -4,6 +4,8 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 export const SUPPORT_URL = "https://github.com/vvnovg/glafira-load-releases/blob/main/SUPPORT.md";
 /** Текст лицензии Apache 2.0 в репозитории исходного кода. */
 export const LICENSE_URL = "https://github.com/vvnovg/glafira-load/blob/main/LICENSE";
+/** Корень ссылок на файлы релизов: `<корень>/v<версия>/<файл>`. */
+export const RELEASES_DOWNLOAD_URL = "https://github.com/vvnovg/glafira-load-releases/releases/download";
 
 /** Открывает страницу поддержки в системном браузере. */
 export function openSupport(): void {
