@@ -34,9 +34,7 @@ export function draftProblems(m: Manifest): ManifestProblem[] {
     if (envs.has(e.id)) out.push({ kind: "duplicate_environment_id", id: e.id });
     else if (!ID_RE.test(e.id)) out.push({ kind: "bad_environment_id", id: e.id });
     envs.add(e.id);
-  }
-  // Агенты — после всех стендов, как в `validate`: повтор, иначе плохой ID; адрес; вес.
-  for (const e of m.environments) {
+    // Агенты стенда идут сразу за его собственными проблемами, как в `validate`: повтор, иначе плохой ID; адрес; вес.
     const agentIds = new Set<string>();
     for (const a of e.agents ?? []) {
       if (agentIds.has(a.id)) out.push({ kind: "duplicate_agent_id", env: e.id, id: a.id });
@@ -250,6 +248,9 @@ function ExistingProject({ path }: { path: string }) {
     onSuccess: (p: Project) => {
       qc.setQueryData(["project", path], p);
       void qc.invalidateQueries({ queryKey: ["projects"] });
+      // Список агентов или их адреса могли измениться — старые бейджи probe больше не про них.
+      // reset, не invalidate: запрос включается только кнопкой «Проверить», сеть сам не трогаем.
+      void qc.resetQueries({ queryKey: ["agentProbe", path] });
     },
   });
   const scanAll = useMutation({

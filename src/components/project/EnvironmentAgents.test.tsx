@@ -23,8 +23,8 @@ const initial: Agent[] = [
   { id: "gen-2", url: "http://10.0.1.12:7420", weight: 2 },
 ];
 
-function Harness({ onChange, saved = ["gen-1", "gen-2"] }: { onChange?: (a: Agent[]) => void; saved?: string[] }) {
-  const [agents, setAgents] = useState<Agent[]>(initial);
+function Harness({ onChange, saved = ["gen-1", "gen-2"], start = initial }: { onChange?: (a: Agent[]) => void; saved?: string[]; start?: Agent[] }) {
+  const [agents, setAgents] = useState<Agent[]>(start);
   return (
     <EnvironmentAgents
       path="/p"
@@ -109,6 +109,33 @@ describe("EnvironmentAgents", () => {
     expect(screen.getAllByLabelText(/Токен агента/)[2]).toBeDisabled();
     await userEvent.click(screen.getByRole("button", { name: "Удалить агента gen-2" }));
     expect(onChange).toHaveBeenLastCalledWith([initial[0], expect.objectContaining({ id: "gen-1" })]);
+  });
+
+  it("keeps a typed token with its own agent when a row above is removed", async () => {
+    const three: Agent[] = [...initial, { id: "gen-3", url: "http://10.0.1.13:7420", weight: 1 }];
+    renderWithClient(<Harness start={three} saved={["gen-1", "gen-2", "gen-3"]} />);
+    await userEvent.type(screen.getByLabelText("Токен агента gen-2"), "s3cret");
+    await userEvent.click(screen.getByRole("button", { name: "Удалить агента gen-1" }));
+    // Токен остался у gen-2, а gen-3, которая заняла индекс 1, получила пустое поле.
+    expect(screen.getByLabelText("Токен агента gen-2")).toHaveValue("s3cret");
+    expect(screen.getByLabelText("Токен агента gen-3")).toHaveValue("");
+    const save = screen.getAllByRole("button", { name: "Сохранить токен" });
+    expect(save[0]).toBeEnabled();
+    expect(save[1]).toBeDisabled();
+    await userEvent.click(save[0]);
+    expect(api.agentSetToken).toHaveBeenCalledTimes(1);
+    expect(api.agentSetToken).toHaveBeenCalledWith("/p", "test", "gen-2", "s3cret");
+    // Метка «сохранён» тоже не переезжает к другому агенту.
+    await waitFor(() => expect(screen.getByLabelText("Токен агента gen-2")).toHaveValue(""));
+    expect(screen.getAllByText("Токен сохранён в хранилище ОС")).toHaveLength(1);
+  });
+
+  it("does not move the token state when the id of the row is edited", async () => {
+    renderWithClient(<Harness />);
+    await userEvent.type(screen.getByLabelText("Токен агента gen-2"), "x");
+    await userEvent.type(screen.getAllByLabelText("ID агента")[1], "a");
+    // Новый id ещё не в манифесте — поле заблокировано, но введённое значение остаётся в строке.
+    expect(screen.getByLabelText("Токен агента gen-2a")).toHaveValue("x");
   });
 
   it("asks to save the manifest before a token of a new agent can be stored", async () => {

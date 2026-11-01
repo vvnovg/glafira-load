@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { renderWithClient } from "../../test/render";
@@ -15,6 +15,8 @@ const api = vi.hoisted(() => {
     projectCreate: vi.fn(async (path: string, name: string) => ({ ...project, path, manifest: { ...project.manifest, name, services: [] } })),
     openPath: vi.fn(async () => undefined),
     serviceScan: vi.fn(async () => []),
+    agentProbe: vi.fn(async () => [{ id: "gen-1", url: "http://10.0.1.11:7420", state: "ready", info: { version: "0.2.0", os: "linux", arch: "x86_64", cpus: 8, busy: null }, message: null }]),
+    agentSetToken: vi.fn(async () => undefined),
   };
 });
 vi.mock("../../api/client", () => ({ api, toAppError: (e: unknown) => e }));
@@ -127,5 +129,21 @@ describe("ProjectPanel", () => {
     await userEvent.click(screen.getByRole("button", { name: "Удалить агента" }));
     // Черновик снова равен сохранённому манифесту — сохранять нечего.
     expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
+  });
+
+  it("drops the cached agent badges after the manifest is saved", async () => {
+    renderWithClient(<ProjectPanel path="/p/orders" />);
+    await screen.findByLabelText("Имя проекта");
+    await userEvent.click(screen.getByRole("button", { name: "Добавить агента" }));
+    await userEvent.type(screen.getByLabelText("ID агента"), "gen-1");
+    await userEvent.type(screen.getByLabelText("Адрес агента"), "http://10.0.1.11:7420");
+    await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Проверить" }));
+    expect(await screen.findByTestId("agent-state")).toHaveTextContent("готов");
+    // Адрес изменился и сохранён — бейдж по старому адресу не должен остаться.
+    await userEvent.type(screen.getByLabelText("Адрес агента"), "0");
+    await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+    await waitFor(() => expect(screen.queryByTestId("agent-state")).not.toBeInTheDocument());
+    expect(api.agentProbe).toHaveBeenCalledTimes(1);
   });
 });

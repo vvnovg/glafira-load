@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Fragment, useState } from "react";
+import { Fragment, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../../api/client";
 import type { Agent, AgentProbeState, AgentStatus } from "../../api/types";
@@ -87,7 +87,7 @@ function TokenField({
     <div className="row">
       <input
         type="password"
-        autoComplete="off"
+        autoComplete="new-password"
         aria-label={t("agents.token", { id: agent.id })}
         placeholder={t("agents.tokenPlaceholder")}
         value={token}
@@ -131,7 +131,22 @@ export function EnvironmentAgents({
   const probe = useQuery({ queryKey: ["agentProbe", path, envId], queryFn: () => api.agentProbe(path, envId), enabled: false });
   const statuses = new Map((probe.data ?? []).map((s) => [s.id, s]));
   const ids = agents.map((a) => a.id);
+  // Устойчивые ключи строк: не зависят ни от индекса, ни от редактируемого id, поэтому введённый токен
+  // остаётся у своего агента при удалении соседних строк. Ключи идут параллельно `agents`: добавление и
+  // удаление правят их здесь же, а если список подменили снаружи (перечитан черновик) — дополняем или обрезаем.
+  const rowKeys = useRef<number[]>([]);
+  const nextKey = useRef(0);
+  while (rowKeys.current.length < agents.length) rowKeys.current.push(nextKey.current++);
+  rowKeys.current.length = agents.length;
   const update = (i: number, patch: Partial<Agent>) => onChange(agents.map((a, j) => (j === i ? { ...a, ...patch } : a)));
+  const add = () => {
+    rowKeys.current.push(nextKey.current++);
+    onChange([...agents, { id: "", url: "", weight: 1 }]);
+  };
+  const remove = (i: number) => {
+    rowKeys.current.splice(i, 1);
+    onChange(agents.filter((_, j) => j !== i));
+  };
   return (
     <section className="agents">
       <h4>
@@ -154,7 +169,7 @@ export function EnvironmentAgents({
               const badId = !AGENT_ID_RE.test(a.id) || ids.indexOf(a.id) !== i;
               const status = statuses.get(a.id);
               return (
-                <Fragment key={i}>
+                <Fragment key={rowKeys.current[i]}>
                   <tr>
                     <td>
                       <input aria-label={t("agents.id")} aria-invalid={badId || undefined} value={a.id} disabled={disabled} onChange={(e) => update(i, { id: e.target.value })} />
@@ -182,7 +197,7 @@ export function EnvironmentAgents({
                     </td>
                     <td>{status ? <AgentStateBadge status={status} /> : <span className="muted">—</span>}</td>
                     <td>
-                      <button type="button" className="icon" aria-label={t("agents.remove", { id: a.id })} disabled={disabled} onClick={() => onChange(agents.filter((_, j) => j !== i))}>
+                      <button type="button" className="icon" aria-label={t("agents.remove", { id: a.id })} disabled={disabled} onClick={() => remove(i)}>
                         ×
                       </button>
                     </td>
@@ -207,7 +222,7 @@ export function EnvironmentAgents({
         </table>
       )}
       <div className="row">
-        <button type="button" disabled={disabled} onClick={() => onChange([...agents, { id: "", url: "", weight: 1 }])}>
+        <button type="button" disabled={disabled} onClick={add}>
           {t("agents.add")}
         </button>
         <button type="button" disabled={!canProbe || probe.isFetching} onClick={() => void probe.refetch()}>
