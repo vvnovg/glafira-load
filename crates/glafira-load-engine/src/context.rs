@@ -131,30 +131,34 @@ pub fn parse_data(file_name: &str, bytes: &[u8]) -> Result<DataTable, String> {
     parse_table(format, text)
 }
 
-/// Колонки и число строк файла данных для `suite::check`: CSV с заголовком или JSON Lines
-/// (колонки — объединение ключей всех строк, по алфавиту). `None` — файла нет или он не читается.
-/// `path` — относительно `root`, как в `suite.data[*].path`.
+/// Колонки и число строк файла данных для `suite::check`: разбор тот же, что у прогона
+/// (`parse_data`), колонки JSON Lines — по алфавиту. `path` — относительно `root`, как в
+/// `suite.data[*].path`.
+///
+/// `Some` — только если файл внутри проекта и разобран целиком. `None` — путь вне проекта
+/// (об этом сообщает `check` кодом `PATH_OUTSIDE_PROJECT`), файла нет, или он испорчен
+/// (не UTF-8, битая строка CSV или JSON Lines, неизвестное расширение): испорченный файл
+/// пишется в журнал, а `check` сообщает о нём как об отсутствующем наборе.
 pub fn data_info(root: &Path, path: &str) -> Option<glafira_load_model::suite::check::DataInfo> {
-    let text = std::fs::read_to_string(root.join(path)).ok()?;
-    if path.to_ascii_lowercase().ends_with(".jsonl") {
-        let mut columns = std::collections::BTreeSet::new();
-        let mut rows = 0;
-        for line in text.lines().filter(|l| !l.trim().is_empty()) {
-            let value: serde_json::Value = serde_json::from_str(line).ok()?;
-            if let Some(object) = value.as_object() {
-                columns.extend(object.keys().cloned());
-            }
-            rows += 1;
-        }
-        return Some(glafira_load_model::suite::check::DataInfo {
-            columns: columns.into_iter().collect(),
-            rows,
-        });
+    if !is_inside_project(path) {
+        return None;
     }
-    let mut reader = csv::Reader::from_reader(text.as_bytes());
-    let columns = reader.headers().ok()?.iter().map(str::to_string).collect();
-    let rows = reader.records().filter(|r| r.is_ok()).count();
-    Some(glafira_load_model::suite::check::DataInfo { columns, rows })
+    let bytes = std::fs::read(root.join(path)).ok()?;
+    let table = match parse_data(path, &bytes) {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!("data file `{path}` is not readable: {e}");
+            return None;
+        }
+    };
+    let mut columns = table.columns;
+    if DataFormat::from_path(path) == Ok(DataFormat::JsonLines) {
+        columns.sort();
+    }
+    Some(glafira_load_model::suite::check::DataInfo {
+        columns,
+        rows: table.rows.len(),
+    })
 }
 
 /// Путь внутри проекта: относительный, без `..`.
@@ -510,5 +514,21 @@ mod tests {
             (vec!["qty".to_string(), "sku".to_string()], 2)
         );
         assert!(data_info(dir.path(), "data/none.csv").is_none());
+        // Испорченный файл целиком не разобран: `None`, `check` покажет его как отсутствующий.
+        std::fs::write(dir.path().join("data/bad.csv"), "a,b\n1\n").unwrap();
+        assert!(data_info(dir.path(), "data/bad.csv").is_none());
+        std::fs::write(dir.path().join("data/bad.jsonl"), "{\"a\":1}\nnot json\n").unwrap();
+        assert!(data_info(dir.path(), "data/bad.jsonl").is_none());
+        // Путь вне проекта не читается, даже если файл существует.
+        std::fs::write(dir.path().join("outside.csv"), "id\n1\n").unwrap();
+        let nested = dir.path().join("data");
+        assert!(data_info(&nested, "../outside.csv").is_none());
+        assert!(
+            data_info(
+                &nested,
+                &dir.path().join("outside.csv").display().to_string()
+            )
+            .is_none()
+        );
     }
 }

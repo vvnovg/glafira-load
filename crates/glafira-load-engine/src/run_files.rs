@@ -18,6 +18,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::agent_api::{AgentSummary, ErrorSample, Mode, PhaseEvent, RunStatus, Tick};
+use crate::errors::SampleCap;
 use crate::metrics::{OpTotals, ScTotals, Totals, new_histogram};
 use crate::summary::{SmokeReport, sorted_summary};
 
@@ -291,17 +292,34 @@ pub struct RunWriter {
     metrics: Option<BufWriter<File>>,
     errors: Option<BufWriter<File>>,
     phases: Vec<PhaseEvent>,
+    /// Вторая защита предела примеров (первая — у агента): не больше пяти на код и операцию.
+    samples: SampleCap,
 }
 
 impl RunWriter {
+    /// Создаёт папку прогона (родители — по необходимости) и пишет `run.yaml`. Папка уже есть —
+    /// ошибка `AlreadyExists`: два прогона, начатых в одну секунду, не пишут в одну папку.
     pub fn create(dir: &Path, meta: &RunMeta) -> io::Result<Self> {
-        fs::create_dir_all(dir)?;
+        if let Some(parent) = dir.parent().filter(|p| !p.as_os_str().is_empty()) {
+            fs::create_dir_all(parent)?;
+        }
+        fs::create_dir(dir).map_err(|e| {
+            if e.kind() == io::ErrorKind::AlreadyExists {
+                io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!("run folder {} already exists", dir.display()),
+                )
+            } else {
+                io::Error::new(e.kind(), format!("{}: {e}", dir.display()))
+            }
+        })?;
         let w = Self {
             dir: dir.to_path_buf(),
             meta: meta.clone(),
             metrics: None,
             errors: None,
             phases: Vec::new(),
+            samples: SampleCap::new(),
         };
         w.write_run()?;
         Ok(w)
@@ -367,7 +385,12 @@ impl RunWriter {
         )
     }
 
+    /// Дописывает пример в `errors.jsonl`; сверх `MAX_SAMPLES_PER_CODE_OP` на код и операцию
+    /// пример молча отбрасывается.
     pub fn error(&mut self, e: &ErrorSample) -> io::Result<()> {
+        if !self.samples.allow(&e.code, &e.operation) {
+            return Ok(());
+        }
         Self::append(
             &mut self.errors,
             &self.dir,
@@ -624,6 +647,55 @@ mod tests {
         let back: AgentSummary = glafira_load_model::from_yaml(&text).unwrap();
         assert_eq!(back.ops.len(), 2);
         assert!(!dir.join(SMOKE_FILE).exists());
+    }
+
+    fn error_sample(code: &str, operation: &str) -> ErrorSample {
+        ErrorSample {
+            t: 1,
+            code: code.into(),
+            operation: operation.into(),
+            scenario: "s".into(),
+            step: "create".into(),
+            agent: "local".into(),
+            message: "boom".into(),
+            request: None,
+            response: None,
+        }
+    }
+
+    #[test]
+    fn writer_keeps_five_error_samples_per_code_and_operation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("run");
+        let mut w = RunWriter::create(&dir, &meta()).unwrap();
+        for _ in 0..20 {
+            w.error(&error_sample("HTTP_5xx", "a")).unwrap();
+            w.error(&error_sample("TIMEOUT", "a")).unwrap();
+        }
+        let text = std::fs::read_to_string(dir.join(ERRORS_FILE)).unwrap();
+        let codes: Vec<String> = text
+            .lines()
+            .map(|l| serde_json::from_str::<ErrorSample>(l).unwrap().code)
+            .collect();
+        assert_eq!(codes.len(), 2 * crate::errors::MAX_SAMPLES_PER_CODE_OP);
+        assert_eq!(codes.iter().filter(|c| *c == "HTTP_5xx").count(), 5);
+        assert_eq!(codes.iter().filter(|c| *c == "TIMEOUT").count(), 5);
+    }
+
+    #[test]
+    fn writer_refuses_an_existing_run_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("runs").join("2026-11-02T14-30-00");
+        RunWriter::create(&dir, &meta()).unwrap();
+        let err = RunWriter::create(&dir, &meta())
+            .err()
+            .expect("folder exists");
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert!(err.to_string().contains("already exists"), "{err}");
+        assert!(
+            err.to_string().contains("2026-11-02T14-30-00"),
+            "в тексте путь папки: {err}"
+        );
     }
 
     #[test]

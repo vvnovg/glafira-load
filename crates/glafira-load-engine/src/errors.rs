@@ -1,5 +1,6 @@
 //! Коды и ошибки шагов, маскирование секретов и обрезка примеров (спека L2 §5.3).
 
+use std::collections::HashMap;
 use std::fmt;
 
 /// Предел длины запроса и ответа в примере ошибки, байт.
@@ -8,6 +9,8 @@ pub const MAX_SAMPLE: usize = 4096;
 pub const MAX_IN_MESSAGE: usize = 200;
 /// Чем заменяется значение секрета.
 pub const MASK: &str = "***";
+/// Сколько примеров ошибок одного кода одной операции попадает в `errors.jsonl` и в поток событий.
+pub const MAX_SAMPLES_PER_CODE_OP: usize = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum StepCode {
@@ -94,6 +97,32 @@ impl StepError {
             self.response = response;
         }
         self
+    }
+}
+
+/// Счётчик примеров ошибок по паре (код, операция): пропускает не больше
+/// `MAX_SAMPLES_PER_CODE_OP` на пару за всё время жизни счётчика.
+#[derive(Debug, Clone, Default)]
+pub struct SampleCap {
+    counts: HashMap<(String, String), usize>,
+}
+
+impl SampleCap {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// `true` — пример ещё помещается в предел и учтён; `false` — предел пары исчерпан.
+    pub fn allow(&mut self, code: &str, operation: &str) -> bool {
+        let count = self
+            .counts
+            .entry((code.to_string(), operation.to_string()))
+            .or_insert(0);
+        if *count >= MAX_SAMPLES_PER_CODE_OP {
+            return false;
+        }
+        *count += 1;
+        true
     }
 }
 
@@ -239,6 +268,17 @@ mod tests {
         let cut = truncate(text, 10);
         assert!(cut.len() <= 10 && cut.ends_with("..."), "{cut:?}");
         assert_eq!(cut, "日本...");
+    }
+
+    #[test]
+    fn sample_cap_keeps_five_per_code_and_operation() {
+        let mut cap = SampleCap::new();
+        let passed = (0..20).filter(|_| cap.allow("HTTP_5xx", "op-a")).count();
+        assert_eq!(passed, MAX_SAMPLES_PER_CODE_OP);
+        // Другой код и другая операция считаются отдельно.
+        assert!(cap.allow("TIMEOUT", "op-a"));
+        assert!(cap.allow("HTTP_5xx", "op-b"));
+        assert!(!cap.allow("HTTP_5xx", "op-a"));
     }
 
     #[test]

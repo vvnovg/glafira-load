@@ -22,10 +22,10 @@ use crate::agent_api::{
     AgentSummary, EnvAddresses, ErrorSample, Event, Mode, RunRequest, RunStatus,
 };
 use crate::agent_link::{
-    AgentLink, AgentState, ControllerEvent, EngineError, ExecutorFactory, LocalAgent, RunResult,
-    VERSION, secrets_from_env,
+    AgentLink, AgentState, ControllerEvent, DRAIN, EngineError, ExecutorFactory, LocalAgent,
+    RunResult, VERSION, secrets_from_env,
 };
-use crate::context::{RunContext, is_inside_project, parse_data};
+use crate::context::{RunContext, data_info, is_inside_project};
 use crate::executor::{Executors, StepExecutor};
 use crate::http::HttpExecutor;
 use crate::kafka::{KafkaExecutor, topic_of};
@@ -104,14 +104,28 @@ pub struct LoadedSuite {
     pub data: BTreeMap<String, Vec<u8>>,
 }
 
+/// Имя сьюта — имя папки в `suites/`: `[a-z0-9-]{1,64}`, так что `..` и `/` из `suites/` не выводят.
+fn valid_suite_name(name: &str) -> bool {
+    (1..=64).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
 /// Читает `suites/<name>/suite.yaml`, данные с диска и выполняет `check`; ошибки — `SUITE_INVALID`
-/// со списком `file:line: message` в `names`.
+/// со списком `file:line: message` в `names`, недопустимое имя — `INVALID_INPUT`.
 pub fn load_suite(
     root: &Path,
     name: &str,
     registry: &Registry,
     env: Option<&Environment>,
 ) -> Result<LoadedSuite, EngineError> {
+    if !valid_suite_name(name) {
+        return Err(EngineError::new(
+            "INVALID_INPUT",
+            format!("suite name `{name}` must match [a-z0-9-]{{1,64}}"),
+        ));
+    }
     let rel = format!("{SUITES_DIR}/{name}/{SUITE_FILE}");
     let path = root.join(&rel);
     if !path.is_file() {
@@ -128,21 +142,13 @@ pub fn load_suite(
     if let Ok(parsed) = suite::parse(&text) {
         for (set, spec) in &parsed.data {
             // Путь вне проекта — `PATH_OUTSIDE_PROJECT` сообщит `check`; файл не читаем.
-            let bytes = if is_inside_project(&spec.path) {
-                std::fs::read(root.join(&spec.path)).ok()
-            } else {
-                None
-            };
-            let info = bytes
-                .as_deref()
-                .and_then(|b| parse_data(&spec.path, b).ok())
-                .map(|t| DataInfo {
-                    columns: t.columns.clone(),
-                    rows: t.rows.len(),
-                });
-            infos.insert(set.clone(), info);
-            if let Some(b) = bytes {
-                data.insert(set.clone(), b);
+            // Испорченный файл `data_info` отдаёт как `None`: `check` сообщит о нём как об
+            // отсутствующем наборе, и прогон не начнётся.
+            infos.insert(set.clone(), data_info(root, &spec.path));
+            if is_inside_project(&spec.path)
+                && let Ok(bytes) = std::fs::read(root.join(&spec.path))
+            {
+                data.insert(set.clone(), bytes);
             }
         }
     }
@@ -385,8 +391,12 @@ async fn drive(
                 let _ = events.send(ControllerEvent::Phase(p)).await;
             }
             Event::Error(e) => {
+                // Предел примеров держит агент (`SampleCap`), писатель — вторая защита.
                 writer.error(&e)?;
-                errors.push(e.clone());
+                // Примеры в памяти нужны только отчёту смока.
+                if smoke {
+                    errors.push(e.clone());
+                }
                 let _ = events.send(ControllerEvent::Error(e)).await;
             }
             Event::Done(s) => break s,
@@ -537,6 +547,17 @@ pub async fn run_local(
             Ok(result)
         }
         Err(e) => {
+            // Нагрузка не должна идти дальше без слушателя: остановить и дождаться конца
+            // (не дольше доработки и запаса), прежде чем вернуть ошибку.
+            if agent.stop(&run_id).await.is_ok() {
+                let wait = DRAIN + std::time::Duration::from_secs(2);
+                if tokio::time::timeout(wait, agent.files(&run_id))
+                    .await
+                    .is_err()
+                {
+                    tracing::error!("local run {run_id} did not stop within {wait:?}");
+                }
+            }
             let failed = AgentSummary {
                 status: RunStatus::Failed,
                 ops: vec![],
@@ -757,6 +778,32 @@ mod tests {
                 .any(|n| n.contains("suites/broken/suite.yaml")),
             "{invalid:?}"
         );
+        // Имя сьюта — только `[a-z0-9-]{1,64}`: из `suites/` не выйти.
+        write(tmp.path(), "x/suite.yaml", SUITE);
+        for bad in ["../x", "a/b", "Orders", "", &"a".repeat(65)] {
+            assert_eq!(
+                load_suite(tmp.path(), bad, &p.registry, Some(&env))
+                    .unwrap_err()
+                    .code,
+                "INVALID_INPUT",
+                "{bad}"
+            );
+        }
+        // Испорченный файл данных `check` видит как отсутствующий набор.
+        write(
+            tmp.path(),
+            "suites/bad-data/suite.yaml",
+            &SUITE.replace(
+                "name: orders-http\n",
+                "name: bad-data\ndata:\n  users: data/users.csv\n",
+            ),
+        );
+        write(tmp.path(), "data/users.csv", "id,name\n1\n");
+        let bad_data = load_suite(tmp.path(), "bad-data", &p.registry, Some(&env)).unwrap_err();
+        assert_eq!(bad_data.code, "SUITE_INVALID", "{bad_data:?}");
+        write(tmp.path(), "data/users.csv", "id,name\n1,Ann\n");
+        let good = load_suite(tmp.path(), "bad-data", &p.registry, Some(&env)).unwrap();
+        assert_eq!(good.data["users"], b"id,name\n1,Ann\n");
 
         let computed = compute(&p.profiles, "quick", &p.registry, &p.prod).unwrap();
         assert_eq!(targets_of(&computed)["http:orders:POST /v1/orders"], 20.0);
