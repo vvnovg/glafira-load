@@ -32,7 +32,8 @@ use crate::summary::sorted_summary;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Префикс переменных окружения с секретами стенда.
 pub const SECRET_PREFIX: &str = "GLAFIRA_LOAD_SECRET_";
-/// Сколько встроенный агент ждёт активные итерации после конца таймлайна или остановки.
+/// Сколько встроенный агент по умолчанию ждёт активные итерации после конца таймлайна
+/// или остановки (`LocalAgent::with_drain` меняет его).
 pub const DRAIN: Duration = Duration::from_secs(5);
 
 /// Ошибка связи с агентом; коды: `AGENT_UNREACHABLE`, `AGENT_BUSY`, `AGENT_VERSION`,
@@ -334,6 +335,8 @@ pub struct LocalAgent {
     factory: ExecutorFactory,
     /// Секреты `имя → значение` вместо окружения процесса (агент Task 10 собирает их сам).
     secrets: Option<BTreeMap<String, String>>,
+    /// Доработка активных итераций после конца или остановки; по умолчанию `DRAIN`.
+    drain: Duration,
     slot: SharedSlot,
 }
 
@@ -414,6 +417,7 @@ async fn run_task(
     executors: Arc<Executors>,
     out: mpsc::UnboundedSender<(u64, Event)>,
     cancel: CancellationToken,
+    drain: Duration,
 ) -> Result<Vec<u8>, String> {
     let recorder: SharedRecorder = Arc::new(Mutex::new(Recorder::new()));
     let cfg = SchedulerConfig {
@@ -423,7 +427,7 @@ async fn run_task(
         arrival: req.arrival,
         max_in_flight: req.max_in_flight,
         mode: req.mode,
-        drain: DRAIN,
+        drain,
     };
     let (tx, rx) = mpsc::channel::<Event>(1024);
     let cap = (req.mode == Mode::Run).then(SampleCap::new);
@@ -453,8 +457,16 @@ impl LocalAgent {
             id: id.into(),
             factory,
             secrets: None,
+            drain: DRAIN,
             slot: Arc::new(Mutex::new(Slot::Idle)),
         }
+    }
+
+    /// Доработка активных итераций (`--drain-ms` агента Task 10) вместо `DRAIN`; не успевшие
+    /// за неё итерации прерываются, и прогон закрывается за `drain` плюс секунду на прерывание.
+    pub fn with_drain(mut self, drain: Duration) -> Self {
+        self.drain = drain;
+        self
     }
 
     /// Секреты из карты `имя → значение` (без префикса) вместо переменных окружения процесса.
@@ -643,6 +655,7 @@ impl AgentLink for LocalAgent {
                 Arc::new(executors),
                 tx,
                 cancel.clone(),
+                self.drain,
             ),
         ));
         *guard = Slot::Running(ActiveRun {
@@ -1337,6 +1350,78 @@ mod tests {
             .unwrap();
         agent.files("r3").await.unwrap();
         assert_eq!(agent.is_busy(), None);
+    }
+
+    /// Исполнитель Kafka-шагов, каждый шаг которого висит `delay`.
+    struct Slow(Duration);
+
+    #[async_trait]
+    impl StepExecutor for Slow {
+        async fn execute(
+            &self,
+            _step: &glafira_load_model::suite::Step,
+            _ctx: &mut crate::context::IterationCtx<'_>,
+        ) -> Result<crate::executor::StepOutcome, crate::errors::StepError> {
+            tokio::time::sleep(self.0).await;
+            Ok(crate::executor::StepOutcome::default())
+        }
+
+        async fn lag(&self) -> BTreeMap<String, i64> {
+            BTreeMap::new()
+        }
+    }
+
+    fn slow_factory(delay: Duration) -> ExecutorFactory {
+        Arc::new(
+            move |req: RunRequest, suite: Suite, _ctx: Arc<RunContext>| {
+                Box::pin(async move {
+                    let http = crate::http::HttpExecutor::new(
+                        req.env.http.as_deref().unwrap_or(""),
+                        &suite.defaults.http,
+                        &[],
+                    )
+                    .map_err(|m| EngineError::new("INVALID_INPUT", m))?;
+                    Ok(Executors {
+                        http,
+                        kafka: Some(Box::new(Slow(delay)) as Box<dyn StepExecutor>),
+                    })
+                })
+            },
+        )
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn custom_drain_is_honoured_after_stop() {
+        // Итерации висят минуту: прогон закрывается по дренажу, а не по их концу.
+        for drain in [Duration::from_secs(1), Duration::from_secs(20)] {
+            let agent =
+                LocalAgent::new("local", slow_factory(Duration::from_secs(60))).with_drain(drain);
+            agent
+                .start(
+                    &kafka_request("r1", Mode::Run, 10.0),
+                    KAFKA_SUITE,
+                    &BTreeMap::new(),
+                )
+                .await
+                .unwrap();
+            let mut events = agent.events("r1", None).await.unwrap();
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            let stopped_at = tokio::time::Instant::now();
+            agent.stop("r1").await.unwrap();
+            let mut status = None;
+            while let Some((_, ev)) = events.next().await {
+                if let Event::Done(s) = ev {
+                    status = Some(s.status);
+                }
+            }
+            let took = stopped_at.elapsed();
+            assert_eq!(status, Some(RunStatus::Stopped));
+            assert!(
+                took >= drain && took < drain + Duration::from_secs(2),
+                "drain {drain:?}, done after {took:?}"
+            );
+            agent.files("r1").await.unwrap();
+        }
     }
 
     /// Слот `Running` с сигналом конца, как после `start`.
