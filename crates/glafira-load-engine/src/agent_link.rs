@@ -8,13 +8,12 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use futures::StreamExt;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
+use futures::{FutureExt, StreamExt};
 use glafira_load_model::suite::{self, Suite};
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
+use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_util::sync::{CancellationToken, DropGuard};
 
@@ -262,9 +261,13 @@ struct ActiveRun {
     cancel: CancellationToken,
     _cancel_on_drop: DropGuard,
     events: Option<mpsc::UnboundedReceiver<(u64, Event)>>,
-    /// `None` — файлы уже забирает `files`.
-    task: Option<JoinHandle<Result<Vec<u8>, String>>>,
+    /// Сигнал конца задачи прогона: `true` после записи итога в слот. Отправитель закрыт без
+    /// `true` — задача прервана (остановка рантайма), итога не будет.
+    done: watch::Receiver<bool>,
 }
+
+/// Итог задачи прогона: tar файлов агента или ошибка `IO`/`AGENT_UNREACHABLE`.
+type RunOutcome = Result<Vec<u8>, LinkError>;
 
 /// Состояние слота встроенного агента; агент свободен только в `Idle`.
 enum Slot {
@@ -275,8 +278,11 @@ enum Slot {
         cancel: CancellationToken,
     },
     Running(ActiveRun),
-    /// Задача прогона завершилась, но файлы ещё не забраны (`files`).
-    Finished(ActiveRun),
+    /// Задача прогона завершилась и записала итог, но файлы ещё не забраны (`files`).
+    Finished {
+        run: ActiveRun,
+        outcome: RunOutcome,
+    },
 }
 
 impl Slot {
@@ -284,13 +290,13 @@ impl Slot {
         match self {
             Slot::Idle => None,
             Slot::Starting { run_id, .. } => Some(run_id),
-            Slot::Running(r) | Slot::Finished(r) => Some(&r.run_id),
+            Slot::Running(r) | Slot::Finished { run: r, .. } => Some(&r.run_id),
         }
     }
 
     fn run_mut(&mut self, run_id: &str) -> Option<&mut ActiveRun> {
         match self {
-            Slot::Running(r) | Slot::Finished(r) if r.run_id == run_id => Some(r),
+            Slot::Running(r) | Slot::Finished { run: r, .. } if r.run_id == run_id => Some(r),
             _ => None,
         }
     }
@@ -525,22 +531,41 @@ impl LocalAgent {
     }
 }
 
-/// Задача прогона: по выходе переводит слот агента в `Finished` (если агент ещё жив).
+/// Текст паники задачи прогона.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("unknown panic")
+}
+
+/// Задача прогона: по выходе кладёт итог в слот (`Running` → `Finished`, если агент ещё жив)
+/// и подаёт сигнал `done`. Итог живёт в слоте, а не в `JoinHandle`: сброшенное ожидание
+/// `files` ничего не забирает, и следующий `files` получит тот же итог.
 async fn run_and_mark(
     slot: Weak<Mutex<Slot>>,
     run_id: String,
+    done: watch::Sender<bool>,
     run: impl Future<Output = Result<Vec<u8>, String>>,
-) -> Result<Vec<u8>, String> {
-    let result = run.await;
+) {
+    let outcome = match std::panic::AssertUnwindSafe(run).catch_unwind().await {
+        Ok(result) => result.map_err(|m| LinkError::new("IO", m)),
+        Err(panic) => Err(LinkError::new(
+            "AGENT_UNREACHABLE",
+            format!("local run task failed: {}", panic_message(&*panic)),
+        )),
+    };
     if let Some(slot) = slot.upgrade() {
         let mut guard = slot.lock().expect("agent slot");
         if matches!(&*guard, Slot::Running(r) if r.run_id == run_id)
-            && let Slot::Running(r) = std::mem::replace(&mut *guard, Slot::Idle)
+            && let Slot::Running(run) = std::mem::replace(&mut *guard, Slot::Idle)
         {
-            *guard = Slot::Finished(r);
+            *guard = Slot::Finished { run, outcome };
         }
     }
-    result
+    // Сигнал после записи итога: проснувшийся `files` уже видит `Finished`.
+    done.send_replace(true);
 }
 
 #[async_trait]
@@ -603,11 +628,14 @@ impl AgentLink for LocalAgent {
                 names: e.names,
             })?;
         let (tx, rx) = mpsc::unbounded_channel();
+        let (done_tx, done_rx) = watch::channel(false);
         // Задача запускается под замком: её отметка `Finished` не обгонит запись `Running`.
+        // `JoinHandle` не нужен: итог задача кладёт в слот сама.
         let mut guard = self.slot.lock().expect("agent slot");
-        let task = tokio::spawn(run_and_mark(
+        tokio::spawn(run_and_mark(
             Arc::downgrade(&self.slot),
             req.run_id.clone(),
+            done_tx,
             run_task(
                 req.clone(),
                 Arc::new(parsed),
@@ -622,7 +650,7 @@ impl AgentLink for LocalAgent {
             _cancel_on_drop: cancel.clone().drop_guard(),
             cancel,
             events: Some(rx),
-            task: Some(task),
+            done: done_rx,
         });
         reservation.armed = false;
         Ok(())
@@ -647,36 +675,46 @@ impl AgentLink for LocalAgent {
         let guard = self.slot.lock().expect("agent slot");
         match &*guard {
             Slot::Starting { run_id: id, cancel } if id == run_id => cancel.cancel(),
-            Slot::Running(r) | Slot::Finished(r) if r.run_id == run_id => r.cancel.cancel(),
+            Slot::Running(r) | Slot::Finished { run: r, .. } if r.run_id == run_id => {
+                r.cancel.cancel()
+            }
             _ => return Err(not_found(run_id)),
         }
         Ok(())
     }
 
     /// Ждёт конца прогона и отдаёт tar; агент занят, пока файлы не отданы, и свободен после.
+    /// Ожидание слот не меняет: сброшенный `files` (таймаут, отключение клиента) оставляет
+    /// прогон на месте, и следующий `files` отдаст его итог.
     async fn files(&self, run_id: &str) -> Result<Vec<u8>, LinkError> {
-        let task = {
-            let mut guard = self.slot.lock().expect("agent slot");
-            let run = guard.run_mut(run_id).ok_or_else(|| not_found(run_id))?;
-            run.task.take().ok_or_else(|| {
-                LinkError::new(
+        let mut done = {
+            let guard = self.slot.lock().expect("agent slot");
+            match &*guard {
+                Slot::Running(r) | Slot::Finished { run: r, .. } if r.run_id == run_id => {
+                    r.done.clone()
+                }
+                _ => return Err(not_found(run_id)),
+            }
+        };
+        // Ошибка — отправитель закрыт без итога: задача прогона прервана.
+        let ended = done.wait_for(|d| *d).await.is_ok();
+        // Итог забирается и слот освобождается одним шагом под замком.
+        let mut guard = self.slot.lock().expect("agent slot");
+        match std::mem::replace(&mut *guard, Slot::Idle) {
+            Slot::Finished { run, outcome } if run.run_id == run_id => outcome,
+            Slot::Running(run) if run.run_id == run_id && !ended => Err(LinkError::new(
+                "AGENT_UNREACHABLE",
+                format!("local run task of {run_id} ended without a result"),
+            )),
+            other => {
+                // Итог уже забрал параллельный `files`, слот занят другим прогоном.
+                *guard = other;
+                Err(LinkError::new(
                     "NOT_FOUND",
                     format!("files of run {run_id} were already taken"),
-                )
-            })?
-        };
-        let result = task.await;
-        {
-            let mut guard = self.slot.lock().expect("agent slot");
-            if guard.run_id() == Some(run_id) {
-                *guard = Slot::Idle;
+                ))
             }
         }
-        result
-            .map_err(|e| {
-                LinkError::new("AGENT_UNREACHABLE", format!("local run task failed: {e}"))
-            })?
-            .map_err(|m| LinkError::new("IO", m))
     }
 }
 
@@ -1224,7 +1262,7 @@ mod tests {
         assert!(done);
         // Задача прогона отмечает конец сама; файлы ещё не забраны — агент занят.
         tokio::time::timeout(Duration::from_secs(5), async {
-            while !matches!(&*agent.slot.lock().unwrap(), Slot::Finished(_)) {
+            while !matches!(&*agent.slot.lock().unwrap(), Slot::Finished { .. }) {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
         })
@@ -1254,6 +1292,116 @@ mod tests {
             .await
             .unwrap();
         agent.files("r4").await.unwrap();
+        assert_eq!(agent.is_busy(), None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn dropped_files_wait_keeps_the_run_and_a_later_files_succeeds() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let agent = LocalAgent::new("local", counting_factory(calls, false, None));
+        // Прогон на 30 с: ожидание `files` сбрасывается по таймауту задолго до конца.
+        agent
+            .start(
+                &kafka_request("r1", Mode::Run, 0.5),
+                KAFKA_SUITE,
+                &BTreeMap::new(),
+            )
+            .await
+            .unwrap();
+        let dropped = tokio::time::timeout(Duration::from_secs(1), agent.files("r1")).await;
+        assert!(dropped.is_err(), "ожидание сброшено до конца прогона");
+        assert_eq!(agent.is_busy().as_deref(), Some("r1"), "прогон на месте");
+        assert!(matches!(&*agent.slot.lock().unwrap(), Slot::Running(_)));
+        let busy = agent
+            .start(
+                &kafka_request("r2", Mode::Smoke, 0.0),
+                KAFKA_SUITE,
+                &BTreeMap::new(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(busy.code, "AGENT_BUSY");
+
+        let tar = agent.files("r1").await.unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        tar::Archive::new(&tar[..]).unpack(tmp.path()).unwrap();
+        assert!(tmp.path().join(SUMMARY_FILE).exists());
+        assert_eq!(agent.is_busy(), None, "после files агент свободен");
+        agent
+            .start(
+                &kafka_request("r3", Mode::Smoke, 0.0),
+                KAFKA_SUITE,
+                &BTreeMap::new(),
+            )
+            .await
+            .unwrap();
+        agent.files("r3").await.unwrap();
+        assert_eq!(agent.is_busy(), None);
+    }
+
+    /// Слот `Running` с сигналом конца, как после `start`.
+    fn running_slot(run_id: &str) -> (SharedSlot, watch::Sender<bool>) {
+        let (done_tx, done_rx) = watch::channel(false);
+        let cancel = CancellationToken::new();
+        let slot = Arc::new(Mutex::new(Slot::Running(ActiveRun {
+            run_id: run_id.into(),
+            _cancel_on_drop: cancel.clone().drop_guard(),
+            cancel,
+            events: None,
+            done: done_rx,
+        })));
+        (slot, done_tx)
+    }
+
+    fn agent_with_slot(slot: SharedSlot) -> LocalAgent {
+        let mut agent = LocalAgent::new("local", counting_factory(Arc::default(), false, None));
+        agent.slot = slot;
+        agent
+    }
+
+    #[tokio::test]
+    async fn run_task_panic_and_files_error_end_in_their_codes_and_free_the_agent() {
+        // Паника задачи прогона — `AGENT_UNREACHABLE`.
+        let (slot, done) = running_slot("r1");
+        let agent = agent_with_slot(slot.clone());
+        let task = tokio::spawn(run_and_mark(
+            Arc::downgrade(&slot),
+            "r1".into(),
+            done,
+            async { panic!("scheduler exploded") },
+        ));
+        let err = agent.files("r1").await.unwrap_err();
+        assert_eq!(err.code, "AGENT_UNREACHABLE");
+        assert!(
+            err.message.contains("scheduler exploded"),
+            "{}",
+            err.message
+        );
+        assert_eq!(agent.is_busy(), None);
+        task.await.unwrap();
+
+        // Файлы не собраны — `IO`.
+        let (slot, done) = running_slot("r2");
+        let agent = agent_with_slot(slot.clone());
+        tokio::spawn(run_and_mark(
+            Arc::downgrade(&slot),
+            "r2".into(),
+            done,
+            async { Err("agent files tar: disk full".to_string()) },
+        ));
+        let err = agent.files("r2").await.unwrap_err();
+        assert_eq!(
+            (err.code.as_str(), err.message.as_str()),
+            ("IO", "agent files tar: disk full")
+        );
+        assert_eq!(agent.is_busy(), None);
+
+        // Задача прервана без итога (отправитель сигнала закрыт) — `AGENT_UNREACHABLE`.
+        let (slot, done) = running_slot("r3");
+        let agent = agent_with_slot(slot);
+        drop(done);
+        let err = agent.files("r3").await.unwrap_err();
+        assert_eq!(err.code, "AGENT_UNREACHABLE");
         assert_eq!(agent.is_busy(), None);
     }
 
