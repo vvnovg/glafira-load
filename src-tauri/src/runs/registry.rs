@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::{AppError, AppResult, ErrorCode};
@@ -18,6 +20,8 @@ struct Running {
 #[derive(Default)]
 pub struct RunRegistry {
     running: Mutex<HashMap<String, Running>>,
+    /// Будит `wait_idle`, когда снят последний прогон.
+    idle: Notify,
 }
 
 pub fn busy() -> AppError {
@@ -47,7 +51,11 @@ impl RunRegistry {
     }
 
     pub fn finish(&self, project: &str) {
-        self.running.lock_safe().remove(project);
+        let mut r = self.running.lock_safe();
+        r.remove(project);
+        if r.is_empty() {
+            self.idle.notify_waiters();
+        }
     }
 
     pub fn set_run_id(&self, project: &str, run_id: &str) {
@@ -84,6 +92,25 @@ impl RunRegistry {
 
     pub fn is_busy(&self) -> bool {
         !self.running.lock_safe().is_empty()
+    }
+
+    /// Ждёт, пока не останется ни одного прогона, но не дольше `timeout`; `false` — не дождались.
+    /// Прогон снимается с регистрации после того, как контроллер дописал папку прогона.
+    pub async fn wait_idle(&self, timeout: Duration) -> bool {
+        tokio::time::timeout(timeout, async {
+            loop {
+                // Подписка до проверки: `finish` между проверкой и ожиданием не теряется.
+                let notified = self.idle.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                if !self.is_busy() {
+                    return;
+                }
+                notified.await;
+            }
+        })
+        .await
+        .is_ok()
     }
 
     /// Регистрирует прогон и снимает регистрацию при выходе из области видимости — в том числе
@@ -153,5 +180,27 @@ mod tests {
         }
         assert!(!r.is_busy(), "снят при выходе");
         assert!(r.guard("/p".into()).is_ok());
+    }
+
+    #[tokio::test]
+    async fn wait_idle_returns_when_the_last_run_finishes_or_on_timeout() {
+        let r = Arc::new(RunRegistry::default());
+        assert!(r.wait_idle(Duration::ZERO).await, "прогонов нет — сразу");
+        r.start("/p").unwrap();
+        r.start("/q").unwrap();
+        assert!(
+            !r.wait_idle(Duration::from_millis(20)).await,
+            "не дождались"
+        );
+        let r2 = r.clone();
+        let finisher = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            r2.finish("/p");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            r2.finish("/q");
+        });
+        assert!(r.wait_idle(Duration::from_secs(5)).await);
+        assert!(!r.is_busy());
+        finisher.await.unwrap();
     }
 }

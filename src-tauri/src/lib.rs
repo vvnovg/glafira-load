@@ -22,9 +22,19 @@ use tauri::{Emitter, Manager};
 
 use crate::state::AppState;
 
-/// Событие фронтенду: окно закрывают при идущем прогоне (Task 16 показывает диалог и вызывает
-/// `run_stop` или `confirm_close`).
+/// Событие фронтенду: окно закрывают или выходят из приложения (Cmd+Q) при идущем прогоне;
+/// фронтенд показывает диалог и вызывает `confirm_close`.
 pub const RUN_CLOSE_REQUESTED: &str = "run-close-requested";
+
+/// Окно, в котором фронтенд показывает диалог закрытия (метка по умолчанию в `tauri.conf.json`).
+const MAIN_WINDOW: &str = "main";
+
+/// Задержать выход из приложения и спросить пользователя? Только когда выход запросил
+/// пользователь (`code = None`: Cmd+Q, «Завершить» в доке), идёт прогон и есть окно для диалога.
+/// Выход из `confirm_close` (`app.exit(0)` → `Some(0)`) и перезапуск после обновления — не держим.
+pub fn hold_exit(code: Option<i32>, busy: bool, has_window: bool) -> bool {
+    code.is_none() && busy && has_window
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -100,6 +110,40 @@ pub fn run() {
             commands::run::run_get,
             commands::run::confirm_close,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while building tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+                let busy = app.state::<AppState>().runs.is_busy();
+                let window = app.get_webview_window(MAIN_WINDOW);
+                if hold_exit(code, busy, window.is_some()) {
+                    api.prevent_exit();
+                    if let Some(w) = window
+                        && let Err(e) = w.emit(RUN_CLOSE_REQUESTED, ())
+                    {
+                        tracing::warn!("exit prompt was not delivered: {e}");
+                    }
+                }
+            }
+        });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hold_exit;
+
+    #[test]
+    fn exit_is_held_only_when_the_user_quits_during_a_run() {
+        assert!(
+            hold_exit(None, true, true),
+            "Cmd+Q во время прогона — диалог"
+        );
+        assert!(!hold_exit(Some(0), true, true), "выход из confirm_close");
+        assert!(
+            !hold_exit(Some(tauri::RESTART_EXIT_CODE), true, true),
+            "перезапуск после обновления"
+        );
+        assert!(!hold_exit(None, false, true), "прогона нет");
+        assert!(!hold_exit(None, true, false), "окна нет — спрашивать негде");
+    }
 }

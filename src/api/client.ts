@@ -112,6 +112,9 @@ export const api = {
   runList: (path: string) => call<RunListEntry[]>("run_list", { path }),
   /** `dir` — `runs/<папка>` из `RunListEntry.dir`. */
   runGet: (path: string, dir: string) => call<RunDetails>("run_get", { path, dir }),
-  /** Ответ на событие `run-close-requested`: остановить прогоны и закрыть окно. */
-  confirmClose: () => call<void>("confirm_close"),
+  /**
+   * Ответ на событие `run-close-requested`. `stop = true` — бэкенд останавливает все прогоны и ждёт (не дольше 30 с),
+   * пока они допишут папки; `false` — ничего не отменяет: агенты стенда доработают сами. Затем приложение завершается.
+   */
+  confirmClose: (stop: boolean) => call<void>("confirm_close", { stop }),
 };

@@ -335,6 +335,14 @@ pub async fn stop(st: &AppState, path: String) -> AppResult<()> {
     .await
 }
 
+/// Останавливает все прогоны приложения и ждёт, пока контроллеры остановят агентов и допишут
+/// папки, но не дольше `timeout`. Возвращает (сколько остановлено, дождались ли).
+pub async fn stop_all(st: &AppState, timeout: std::time::Duration) -> (usize, bool) {
+    let stopped = st.runs.stop_all();
+    let idle = st.runs.wait_idle(timeout).await;
+    (stopped, idle)
+}
+
 fn invalid_file(file: &str, message: &str) -> AppError {
     app_err!(
         ErrorCode::ProjectInvalid,
@@ -647,6 +655,42 @@ pub(crate) mod tests {
         );
         // Остановка без прогона — не ошибка.
         stop(&st, path).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn stop_all_waits_until_the_run_folder_is_complete() {
+        let (tmp, path) = project_with_stub().await;
+        let st = state(&tmp.path().join("data"));
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let tx = Mutex::new(Some(tx));
+        let run = tokio::spawn({
+            let (st, path) = (st.clone(), path.clone());
+            async move {
+                start(&st, path, request("orders-http", Mode::Run), move |ev| {
+                    if matches!(ev, ControllerEvent::Started { .. })
+                        && let Some(tx) = tx.lock().unwrap().take()
+                    {
+                        let _ = tx.send(());
+                    }
+                })
+                .await
+            }
+        });
+        rx.await.unwrap();
+        // Как `confirm_close(stop = true)`: остановить всё и дождаться, не дожидаясь ответа `run_start`.
+        let (stopped, idle) = stop_all(&st, std::time::Duration::from_secs(30)).await;
+        assert_eq!((stopped, idle), (1, true));
+        assert!(!st.runs.is_busy());
+        let d = ProjectDir::open(&path).unwrap();
+        let dirs = run_dirs(&d);
+        assert_eq!(dirs.len(), 1);
+        let got = details(&d, &format!("{RUNS_DIR}/{}", dirs[0])).unwrap();
+        assert!(matches!(got.meta.status, Some(RunStatus::Stopped)));
+        assert!(got.meta.ended_at.is_some(), "папка дописана до выхода");
+        let result = run.await.unwrap().unwrap();
+        assert!(matches!(result.status, RunStatus::Stopped));
+        // Прогонов нет — сразу.
+        assert_eq!(stop_all(&st, std::time::Duration::ZERO).await, (0, true));
     }
 
     #[tokio::test]

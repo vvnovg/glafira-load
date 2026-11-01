@@ -7,9 +7,27 @@ export interface DialogAction { label: string; onClick: () => void; primary?: bo
 /**
  * Модальный вопрос с кнопками действий и «Отмена»; Esc и клик по фону — отмена, Tab ходит по кругу.
  * Фокус при открытии уходит в диалог, при закрытии возвращается к элементу, который был в фокусе.
+ * `cancelDisabled` — отменить уже нельзя: «Отмена», Esc и клик по фону ничего не делают.
  */
-export function ConfirmDialog({ title, message, actions, onCancel, children }: { title: string; message: string; actions: DialogAction[]; onCancel: () => void; children?: ReactNode }) {
+export function ConfirmDialog({
+  title,
+  message,
+  actions,
+  onCancel,
+  cancelDisabled = false,
+  children,
+}: {
+  title: string;
+  message: string;
+  actions: DialogAction[];
+  onCancel: () => void;
+  cancelDisabled?: boolean;
+  children?: ReactNode;
+}) {
   const { t } = useTranslation();
+  const cancel = () => {
+    if (!cancelDisabled) onCancel();
+  };
   const root = useRef<HTMLDivElement>(null);
   const uid = useId();
   useEffect(() => {
@@ -20,7 +38,7 @@ export function ConfirmDialog({ title, message, actions, onCancel, children }: {
     };
   }, []);
   return (
-    <div className="modal-backdrop" onClick={onCancel}>
+    <div className="modal-backdrop" onClick={cancel}>
       <div
         ref={root}
         className="modal"
@@ -31,7 +49,7 @@ export function ConfirmDialog({ title, message, actions, onCancel, children }: {
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
-          if (e.key === "Escape") onCancel();
+          if (e.key === "Escape") cancel();
           else if (e.key === "Tab") trapTab(root.current, e);
         }}
       >
@@ -44,7 +62,7 @@ export function ConfirmDialog({ title, message, actions, onCancel, children }: {
               {a.label}
             </button>
           ))}
-          <button type="button" onClick={onCancel}>
+          <button type="button" disabled={cancelDisabled} onClick={cancel}>
             {t("common.cancel")}
           </button>
         </div>

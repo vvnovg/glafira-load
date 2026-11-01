@@ -2,6 +2,7 @@
 //! закрытия окна при идущем прогоне (спека §7.1–§7.2).
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use glafira_load_engine::agent_api::Mode;
 use glafira_load_engine::controller::{ControllerEvent, RunResult};
@@ -67,11 +68,30 @@ pub async fn run_get(path: String, dir: String) -> AppResult<RunDetails> {
     blocking(move || runs::details(&ProjectDir::open(&path)?, &dir)).await
 }
 
-/// Пользователь подтвердил закрытие при идущем прогоне: агенты стенда доработают сами
-/// (спека §6.3), локальный прогон останавливается вместе с процессом и не успевает дописать файлы.
+/// Сколько `confirm_close(stop = true)` ждёт, пока остановленные прогоны допишут папки.
+pub const CLOSE_STOP_WAIT: Duration = Duration::from_secs(30);
+
+/// Пользователь подтвердил закрытие при идущем прогоне (спека §7.1). `stop = true` — остановить
+/// все прогоны и дождаться, пока контроллеры остановят агентов и допишут папки (не дольше
+/// `CLOSE_STOP_WAIT`), затем выйти. `stop = false` — ничего не отменять: агенты стенда доработают
+/// сами, папка прогона достроится при следующем открытии проекта (спека §6.3); встроенный агент
+/// (стенд без агентов, смок) завершается вместе с процессом.
 #[tauri::command]
-pub fn confirm_close(app: AppHandle, state: State<'_, AppState>) {
-    let stopped = state.runs.stop_all();
-    tracing::info!(stopped, "closing on user confirmation");
+pub async fn confirm_close(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    stop: bool,
+) -> AppResult<()> {
+    if stop {
+        let (stopped, idle) = runs::stop_all(state.inner(), CLOSE_STOP_WAIT).await;
+        if !idle {
+            tracing::warn!(stopped, "runs did not finish in time, closing anyway");
+        }
+        tracing::info!(stopped, idle, "closing after stopping the runs");
+    } else {
+        tracing::info!("closing on user confirmation, runs are left to the agents");
+    }
+    // `ExitRequested { code: Some(0) }`: обработчик в `lib.rs` такой выход не задерживает.
     app.exit(0);
+    Ok(())
 }

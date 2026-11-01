@@ -702,7 +702,9 @@
       "message": "Stop the run and close the window, or close it and let the agents finish on their own? The run folder will be completed when the project is opened next time.",
       "stop": "Stop and close",
       "leave": "Close, agents finish",
-      "stopping": "Stopping the run…"
+      "messageInside": "The run executes inside the application and is interrupted when it closes. Stop the run and close the window, or close it right away? The interrupted run will be marked incomplete when the project is opened next time.",
+      "leaveInside": "Close, run is interrupted",
+      "stopping": "Stopping the run, the application will close when it finishes…"
     }
   },
   "units": {

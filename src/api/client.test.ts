@@ -25,7 +25,8 @@ describe("api L2", () => {
     await api.runStop("/p");
     await api.runList("/p");
     await api.runGet("/p", "runs/2026-11-01T10-00-00");
-    await api.confirmClose();
+    await api.confirmClose(true);
+    await api.confirmClose(false);
     expect(core.invoke.mock.calls).toEqual([
       ["suite_list", { path: "/p" }],
       ["suite_get", { path: "/p", name: "orders" }],
@@ -36,7 +37,8 @@ describe("api L2", () => {
       ["run_stop", { path: "/p" }],
       ["run_list", { path: "/p" }],
       ["run_get", { path: "/p", dir: "runs/2026-11-01T10-00-00" }],
-      ["confirm_close", undefined],
+      ["confirm_close", { stop: true }],
+      ["confirm_close", { stop: false }],
     ]);
   });
 
