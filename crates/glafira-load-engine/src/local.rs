@@ -176,6 +176,18 @@ pub fn load_suite(
     })
 }
 
+/// Расчёт профиля `name` по реестру и прод-нагрузке проекта; неизвестный профиль — `NOT_FOUND`,
+/// прочие ошибки расчёта — `INVALID_INPUT`.
+pub fn compute_profile(project: &Project, name: &str) -> Result<Computed, EngineError> {
+    compute(&project.profiles, name, &project.registry, &project.prod).map_err(|e| {
+        let code = match e {
+            ProfileError::UnknownProfile(_) => "NOT_FOUND",
+            _ => "INVALID_INPUT",
+        };
+        EngineError::new(code, e.to_string()).with_names(vec![name.to_string()])
+    })
+}
+
 /// Цели операций из расчёта профиля.
 pub fn targets_of(computed: &Computed) -> BTreeMap<String, f64> {
     computed
@@ -442,21 +454,7 @@ pub async fn run_local(
     let computed = if smoke && req.profile.is_empty() {
         None
     } else {
-        Some(
-            compute(
-                &project.profiles,
-                &req.profile,
-                &project.registry,
-                &project.prod,
-            )
-            .map_err(|e| {
-                let code = match e {
-                    ProfileError::UnknownProfile(_) => "NOT_FOUND",
-                    _ => "INVALID_INPUT",
-                };
-                EngineError::new(code, e.to_string())
-            })?,
-        )
+        Some(compute_profile(&project, &req.profile)?)
     };
     let secret_names = loaded.suite.secrets.clone();
     secrets_from_env(&secret_names).map_err(|names| {
