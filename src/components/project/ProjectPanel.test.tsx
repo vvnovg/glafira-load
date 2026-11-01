@@ -146,4 +146,26 @@ describe("ProjectPanel", () => {
     await waitFor(() => expect(screen.queryByTestId("agent-state")).not.toBeInTheDocument());
     expect(api.agentProbe).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps a typed agent token under its own stand when a stand above is removed", async () => {
+    const view = await api.projectView();
+    const agent = (id: string) => ({ id, url: `http://${id}:7420`, weight: 1 });
+    const three = { ...view, missingServices: [], manifest: { ...view.manifest, environments: ["test", "stage", "prod"].map((id, i) => ({ id, kind: "test", http: "https://t", agents: [agent(`gen-${i + 1}`)] })) } };
+    const defaultView = api.projectView.getMockImplementation();
+    api.projectView.mockImplementation(async () => three);
+    try {
+      renderWithClient(<ProjectPanel path="/p/orders" />);
+      await userEvent.type(await screen.findByLabelText("Токен агента gen-2"), "s3cret");
+      // «Удалить» — сначала сервис orders, затем стенды test, stage, prod.
+      await userEvent.click(screen.getAllByRole("button", { name: "Удалить" })[1]);
+      // Токен остался у стенда stage, а prod, занявший его индекс, получил пустое поле.
+      expect(screen.getByLabelText("Токен агента gen-2")).toHaveValue("s3cret");
+      expect(screen.getByLabelText("Токен агента gen-3")).toHaveValue("");
+      await userEvent.click(screen.getAllByRole("button", { name: "Сохранить токен" })[0]);
+      expect(api.agentSetToken).toHaveBeenCalledTimes(1);
+      expect(api.agentSetToken).toHaveBeenCalledWith("/p/orders", "stage", "gen-2", "s3cret");
+    } finally {
+      api.projectView.mockImplementation(defaultView ?? (async () => view));
+    }
+  });
 });

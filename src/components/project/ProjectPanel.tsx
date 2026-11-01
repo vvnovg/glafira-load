@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api, toAppError } from "../../api/client";
 import type { EnvKind, Environment, Manifest, ManifestProblem, Project, ScanProgress, ScanReport, Service } from "../../api/types";
@@ -238,6 +238,10 @@ function ExistingProject({ path }: { path: string }) {
     api.projectOpen(path).catch(() => undefined);
   }, [path]);
   const [draft, setDraft] = useState<Manifest | null>(null);
+  // Устойчивые ключи строк стендов (параллельно `draft.environments`): не зависят ни от индекса, ни от редактируемого id,
+  // иначе состояние формы агентов (введённый токен) переезжало бы к соседнему стенду при удалении строки выше.
+  const envKeys = useRef<number[]>([]);
+  const nextEnvKey = useRef(0);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
   const [reports, setReports] = useState<ScanReport[]>([]);
   useEffect(() => {
@@ -269,6 +273,9 @@ function ExistingProject({ path }: { path: string }) {
   const p = q.data;
   if (!p || !draft) return <p className="empty">{t("common.loading")}</p>;
   const update = (patch: Partial<Manifest>) => setDraft({ ...draft, ...patch });
+  // Если черновик подменили снаружи (перечитан после сохранения) — дополняем или обрезаем ключи по длине.
+  while (envKeys.current.length < draft.environments.length) envKeys.current.push(nextEnvKey.current++);
+  envKeys.current.length = draft.environments.length;
   const dirty = JSON.stringify(draft) !== JSON.stringify(p.manifest);
   const problems = draftProblems(draft);
   const badServices = badIds(draft.services.map((s) => s.id));
@@ -347,16 +354,22 @@ function ExistingProject({ path }: { path: string }) {
         </h3>
         {draft.environments.map((e, i) => (
           <EnvRow
-            key={i}
+            key={envKeys.current[i]}
             e={e}
             path={path}
             savedAgents={(p.manifest.environments.find((x) => x.id === e.id)?.agents ?? []).map((a) => a.id)}
             invalid={badEnvs.has(i)}
             onChange={(next) => update({ environments: draft.environments.map((x, j) => (j === i ? next : x)) })}
-            onRemove={() => update({ environments: draft.environments.filter((_, j) => j !== i) })}
+            onRemove={() => {
+              envKeys.current.splice(i, 1);
+              update({ environments: draft.environments.filter((_, j) => j !== i) });
+            }}
           />
         ))}
-        <button type="button" onClick={() => update({ environments: [...draft.environments, { id: "", kind: "dev" }] })}>
+        <button type="button" onClick={() => {
+            envKeys.current.push(nextEnvKey.current++);
+            update({ environments: [...draft.environments, { id: "", kind: "dev" }] });
+          }}>
           {t("project.addEnvironment")}
         </button>
         {save.error && <ErrorBanner error={save.error} />}
