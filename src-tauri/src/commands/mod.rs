@@ -3,6 +3,7 @@ pub mod app;
 pub mod load;
 pub mod project;
 pub mod registry;
+pub mod run;
 pub mod scan;
 pub mod settings;
 pub mod suite;

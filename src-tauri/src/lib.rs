@@ -18,9 +18,13 @@ pub mod storage;
 pub mod suites;
 pub mod sync;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 use crate::state::AppState;
+
+/// Событие фронтенду: окно закрывают при идущем прогоне (Task 16 показывает диалог и вызывает
+/// `run_stop` или `confirm_close`).
+pub const RUN_CLOSE_REQUESTED: &str = "run-close-requested";
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -40,6 +44,17 @@ pub fn run() {
             let st = AppState::new(&dir)?.with_policy(policy);
             app.manage(st);
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let st = window.state::<AppState>();
+                if st.runs.is_busy() {
+                    api.prevent_close();
+                    if let Err(e) = window.emit(RUN_CLOSE_REQUESTED, ()) {
+                        tracing::warn!("close prompt was not delivered: {e}");
+                    }
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::app::get_app_info,
@@ -79,6 +94,11 @@ pub fn run() {
             commands::suite::suite_create,
             commands::agent::agent_set_token,
             commands::agent::agent_probe,
+            commands::run::run_start,
+            commands::run::run_stop,
+            commands::run::run_list,
+            commands::run::run_get,
+            commands::run::confirm_close,
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");

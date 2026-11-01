@@ -96,13 +96,23 @@
       "badName": "Suite name must be 1–64 lowercase latin letters, digits or dashes: {{name}}",
       "exists": "Suite {{name}} already exists",
       "noOperations": "Select at least one operation",
-      "unsupportedKind": "Operation {{id}} of kind {{kind}} cannot be used in a suite"
+      "unsupportedKind": "Operation {{id}} of kind {{kind}} cannot be used in a suite",
+      "invalid": "Suite {{name}} has {{count}} error(s)",
+      "rejected": "Suite rejected by agent {{id}}: {{message}}"
     },
     "agent": {
-      "notFound": "Agent {{id}} is not in environment {{env}}"
+      "notFound": "Agent {{id}} is not in environment {{env}}",
+      "tokenMissing": "Agent {{id}} has no token in the secret store",
+      "unreachable": "Agent {{id}} is unreachable: {{message}}",
+      "unauthorized": "Agent {{id}} rejected the token",
+      "busy": "Agent {{id}} is busy with another run: {{message}}",
+      "version": "Agent {{id}} version does not match the app: {{message}}",
+      "secretMissing": "Agent {{id}} has no secrets: {{names}}"
     },
     "run": {
-      "busy": "A run is already in progress in this project"
+      "busy": "A run is already in progress in this project",
+      "notFound": "Run {{dir}} not found",
+      "secretMissing": "Set environment variables for secrets before starting the app: {{names}}"
     }
   },
   "settings": {
