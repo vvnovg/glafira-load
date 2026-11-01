@@ -536,7 +536,7 @@
     "remove": "Remove agent {{id}}",
     "probe": "Check",
     "probeSavedOnly": "Checks the agents of the saved manifest",
-    "empty": "No agents: a run on this environment needs at least one",
+    "empty": "No agents: a run on this environment executes inside the application",
     "info_one": "{{version}} · {{os}}/{{arch}} · {{count}} CPU",
     "info_other": "{{version}} · {{os}}/{{arch}} · {{count}} CPUs",
     "busyRun": "run {{run}}",
