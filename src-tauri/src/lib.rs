@@ -7,6 +7,7 @@ pub mod error;
 pub mod git;
 pub mod load;
 pub mod logging;
+pub mod menu;
 pub mod policy;
 pub mod product;
 pub mod project;
@@ -29,16 +30,52 @@ pub const RUN_CLOSE_REQUESTED: &str = "run-close-requested";
 /// Окно, в котором фронтенд показывает диалог закрытия (метка по умолчанию в `tauri.conf.json`).
 const MAIN_WINDOW: &str = "main";
 
-/// Задержать выход из приложения и спросить пользователя? Только когда выход запросил
-/// пользователь (`code = None`: Cmd+Q, «Завершить» в доке), идёт прогон и есть окно для диалога.
+/// Сколько `RunEvent::Exit` ждёт остановленные прогоны (выход без диалога: Dock → Quit, выход
+/// из системы). Дольше держать завершение процесса нельзя — macOS ждёт недолго.
+pub const EXIT_STOP_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Задержать выход из приложения и спросить пользователя? Только когда выход запросили без кода
+/// (`code = None`), идёт прогон и есть окно для диалога. Это запасной путь: на macOS Cmd+Q
+/// приходит пунктом меню `menu::QUIT_ID` (`on_menu_event`), а Dock → Quit и выход из системы
+/// (`terminate:`) `ExitRequested` не дают вовсе — только `RunEvent::Exit`.
 /// Выход из `confirm_close` (`app.exit(0)` → `Some(0)`) и перезапуск после обновления — не держим.
 pub fn hold_exit(code: Option<i32>, busy: bool, has_window: bool) -> bool {
     code.is_none() && busy && has_window
 }
 
+/// Останавливать ли прогоны при `RunEvent::Exit`? Да, если они ещё идут, а пользователь выход
+/// не подтверждал (Dock → Quit, выход из системы, выход без окна): агенты стенда должны получить
+/// `stop`. После `confirm_close` не трогаем — прогоны уже остановлены или нарочно оставлены агентам.
+pub fn stop_on_exit(busy: bool, exit_confirmed: bool) -> bool {
+    busy && !exit_confirmed
+}
+
+/// Пункт меню «Quit» (Cmd+Q на macOS): идёт прогон — диалог закрытия, иначе выход.
+fn on_quit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let busy = app
+        .try_state::<AppState>()
+        .is_some_and(|st| st.runs.is_busy());
+    let window = app.get_webview_window(MAIN_WINDOW);
+    match crate::menu::quit_action(busy, window.is_some()) {
+        crate::menu::QuitAction::Hold => {
+            if let Some(w) = window
+                && let Err(e) = w.emit(RUN_CLOSE_REQUESTED, ())
+            {
+                tracing::warn!("quit prompt was not delivered: {e}");
+            }
+        }
+        crate::menu::QuitAction::Exit => app.exit(0),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // На macOS — меню по умолчанию со своим «Quit» (см. `menu`); на Windows и Linux Tauri меню
+    // не ставит, там ничего не меняем.
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(crate::menu::app_menu);
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -54,6 +91,11 @@ pub fn run() {
             let st = AppState::new(&dir)?.with_policy(policy);
             app.manage(st);
             Ok(())
+        })
+        .on_menu_event(|app, event| {
+            if event.id() == crate::menu::QUIT_ID {
+                on_quit(app);
+            }
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -112,8 +154,9 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app, event| {
-            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+        .run(|app, event| match event {
+            // Запасной путь: Cmd+Q на macOS теперь приходит пунктом меню (`on_quit`).
+            tauri::RunEvent::ExitRequested { api, code, .. } => {
                 let busy = app.state::<AppState>().runs.is_busy();
                 let window = app.get_webview_window(MAIN_WINDOW);
                 if hold_exit(code, busy, window.is_some()) {
@@ -125,12 +168,29 @@ pub fn run() {
                     }
                 }
             }
+            // Dock → Quit и выход из системы на macOS (`terminate:`) приходят только сюда: выход
+            // уже не отменить и диалог не показать. Лучшее, что можно, — остановить прогоны и
+            // недолго (`EXIT_STOP_WAIT`) подождать, чтобы контроллеры успели послать агентам стенда
+            // `stop`.
+            tauri::RunEvent::Exit => {
+                let Some(st) = app.try_state::<AppState>() else {
+                    return;
+                };
+                if stop_on_exit(st.runs.is_busy(), st.runs.exit_confirmed()) {
+                    let (stopped, idle) = tauri::async_runtime::block_on(crate::runs::stop_all(
+                        st.inner(),
+                        EXIT_STOP_WAIT,
+                    ));
+                    tracing::warn!(stopped, idle, "exit without confirmation, runs stopped");
+                }
+            }
+            _ => {}
         });
 }
 
 #[cfg(test)]
 mod tests {
-    use super::hold_exit;
+    use super::{hold_exit, stop_on_exit};
 
     #[test]
     fn exit_is_held_only_when_the_user_quits_during_a_run() {
@@ -145,5 +205,16 @@ mod tests {
         );
         assert!(!hold_exit(None, false, true), "прогона нет");
         assert!(!hold_exit(None, true, false), "окна нет — спрашивать негде");
+    }
+
+    #[test]
+    fn runs_are_stopped_on_exit_only_without_confirmation() {
+        assert!(stop_on_exit(true, false), "Dock → Quit во время прогона");
+        assert!(
+            !stop_on_exit(true, true),
+            "после confirm_close — решение принято"
+        );
+        assert!(!stop_on_exit(false, false), "прогона нет");
+        assert!(!stop_on_exit(false, true));
     }
 }

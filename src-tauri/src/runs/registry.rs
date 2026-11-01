@@ -1,6 +1,7 @@
 //! Идущие прогоны: один на проект (`RUN_BUSY`), токен остановки. Образец — `scan::registry`.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -22,6 +23,9 @@ pub struct RunRegistry {
     running: Mutex<HashMap<String, Running>>,
     /// Будит `wait_idle`, когда снят последний прогон.
     idle: Notify,
+    /// Пользователь подтвердил выход (`confirm_close`): прогоны уже остановлены или нарочно
+    /// оставлены агентам — при `RunEvent::Exit` их не трогаем.
+    exit_confirmed: AtomicBool,
 }
 
 pub fn busy() -> AppError {
@@ -88,6 +92,15 @@ impl RunRegistry {
             v.cancel.cancel();
         }
         r.len()
+    }
+
+    /// Отмечает, что выход подтверждён пользователем (см. `exit_confirmed`).
+    pub fn confirm_exit(&self) {
+        self.exit_confirmed.store(true, Ordering::SeqCst);
+    }
+
+    pub fn exit_confirmed(&self) -> bool {
+        self.exit_confirmed.load(Ordering::SeqCst)
     }
 
     pub fn is_busy(&self) -> bool {
@@ -167,6 +180,14 @@ mod tests {
         r.finish("/p");
         assert_eq!(r.current("/p"), None);
         assert!(r.is_busy(), "/q ещё идёт");
+    }
+
+    #[test]
+    fn exit_confirmation_is_remembered() {
+        let r = RunRegistry::default();
+        assert!(!r.exit_confirmed());
+        r.confirm_exit();
+        assert!(r.exit_confirmed());
     }
 
     #[test]

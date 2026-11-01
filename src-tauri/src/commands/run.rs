@@ -91,6 +91,9 @@ pub async fn confirm_close(
     } else {
         tracing::info!("closing on user confirmation, runs are left to the agents");
     }
+    // Решение принято: обработчик `RunEvent::Exit` в `lib.rs` прогоны больше не трогает
+    // (при `stop = false` они нарочно оставлены агентам).
+    state.runs.confirm_exit();
     // `ExitRequested { code: Some(0) }`: обработчик в `lib.rs` такой выход не задерживает.
     app.exit(0);
     Ok(())
