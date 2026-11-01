@@ -1,7 +1,8 @@
 name: release
 
-# Установщики 0.1.0 без подписи: тег v* — сборка на трёх платформах, артефакты workflow и
-# черновик релиза GitHub с установщиками; вручную — только сборка и артефакты (без релиза).
+# Установщики 0.2.0 без подписи: тег v* — сборка на трёх платформах, артефакты workflow и
+# черновик релиза GitHub с установщиками; job cli прикладывает в тот же черновик бинарники CLI
+# glafira-load-<os>-<arch>[.exe] с .sha256. Вручную — только сборка и артефакты (без релиза).
 # Артефакты updater выключены (createUpdaterArtifacts: false), пока в tauri.conf.json заглушка
 # ключа: подпись updater, Apple и latest.json появятся на этапе L7.
 on:
@@ -46,6 +47,12 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
+      # По тегу — версия манифестов совпадает с тегом; вручную — только согласованность манифестов.
+      - name: Версия манифестов совпадает с тегом
+        shell: bash
+        env:
+          TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+        run: node scripts/check-version.mjs $TAG
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # ветка stable
         with:
           toolchain: stable
@@ -53,7 +60,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf cmake
       - run: pnpm install --frozen-lockfile
       # По тегу tauri-action создаёт черновик релиза (или дополняет уже созданный другой платформой)
       # и прикладывает установщики; вручную tagName пуст — только сборка.
@@ -78,3 +85,101 @@ jobs:
             ${{ env.BUNDLE }}/rpm/*.rpm
             ${{ env.BUNDLE }}/appimage/*.AppImage
           if-no-files-found: error
+
+  # CLI glafira-load: один статический бинарник на платформу, в тот же черновик релиза, что и установщики.
+  # Имя — glafira-load-<os>-<arch>[.exe] со значениями std::env::consts::{OS, ARCH}: по ним «О программе»
+  # собирает команду установки. Linux — musl через cross 0.2.5 (образы с cmake, perl и musl-gcc для librdkafka
+  # и OpenSSL из исходников: cmake 3.23, perl 5.30); macOS x86_64 — нативно на macos-15-intel; Windows — cmake и
+  # Strawberry Perl из образа, nasm не нужен (openssl-src без nasm собирает no-asm).
+  # needs: build + !cancelled(): черновик релиза создаёт tauri-action в build, поэтому к моменту загрузки он
+  # есть, даже если какая-то платформа build упала; вручную (workflow_dispatch) — только артефакты workflow.
+  cli:
+    needs: build
+    if: ${{ !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-musl
+            artifact: glafira-load-linux-x86_64
+            cross: true
+          - os: ubuntu-22.04
+            target: aarch64-unknown-linux-musl
+            artifact: glafira-load-linux-aarch64
+            cross: true
+          - os: macos-15
+            target: aarch64-apple-darwin
+            artifact: glafira-load-macos-aarch64
+            cross: false
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            artifact: glafira-load-macos-x86_64
+            cross: false
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: glafira-load-windows-x86_64.exe
+            cross: false
+    runs-on: ${{ matrix.os }}
+    permissions:
+      # Загрузка бинарников в черновик релиза (только по тегу).
+      contents: write
+    env:
+      TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # ветка stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      # Без кэшей — как в build: релиз собирается с нуля из lock-файла.
+      - name: cross (Linux musl)
+        if: matrix.cross
+        run: cargo install cross --locked --version 0.2.5
+      - name: Сборка CLI (cross, musl)
+        if: matrix.cross
+        run: cross build --release --locked -p glafira-load-cli --target ${{ matrix.target }}
+      - name: Сборка CLI
+        if: ${{ !matrix.cross }}
+        run: cargo build --release --locked -p glafira-load-cli --target ${{ matrix.target }}
+      - name: Артефакт и контрольная сумма
+        shell: bash
+        run: |
+          mkdir -p out
+          src="target/${{ matrix.target }}/release/glafira-load"
+          case "${{ matrix.target }}" in *windows*) src="$src.exe";; esac
+          cp "$src" "out/${{ matrix.artifact }}"
+          cd out
+          if command -v sha256sum >/dev/null; then sha256sum "${{ matrix.artifact }}" > "${{ matrix.artifact }}.sha256"; else shasum -a 256 "${{ matrix.artifact }}" > "${{ matrix.artifact }}.sha256"; fi
+          cat "${{ matrix.artifact }}.sha256"
+      # Бинарник запускается на раннере (кроме aarch64-musl — чужая архитектура): версия и check на
+      # проекте из фикстур (проект без сьютов — ошибка запуска, поэтому кладём сьют orders-http).
+      - name: Проверка бинарника
+        if: matrix.target != 'aarch64-unknown-linux-musl'
+        shell: bash
+        run: |
+          v="$(./out/${{ matrix.artifact }} --version)"
+          echo "$v"
+          case "$v" in "glafira-load $(node -p 'require("./package.json").version')") ;; *) echo "::error::неожиданная версия: $v"; exit 1;; esac
+          p="$RUNNER_TEMP/check-project"
+          mkdir -p "$p/suites/orders-http"
+          cp -R dev/fixtures/suites/project/. "$p/"
+          cp dev/fixtures/suites/orders-http/suite.yaml "$p/suites/orders-http/"
+          ./out/${{ matrix.artifact }} check "$p"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cli-${{ matrix.artifact }}
+          path: out/*
+          if-no-files-found: error
+      - name: В черновик релиза
+        if: env.TAG != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::черновик релиза $TAG не найден — его создаёт job build (tauri-action)"; exit 1
+          fi
+          gh release upload "$TAG" out/* --repo "$GITHUB_REPOSITORY" --clobber
