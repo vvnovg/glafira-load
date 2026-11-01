@@ -21,13 +21,23 @@ struct Pending {
     first_seen: Instant,
 }
 
-/// Буфер секунд: секунда закрывается, когда получены тики всех живых агентов или прошло `hold`
-/// с её первого тика; закрытие секунды закрывает и все более ранние. Закрытые тики отдаются по
-/// порядку `t`, каждая секунда — один раз. Тик уже закрытой секунды (агент дослал его после
-/// переподключения) в ряд не идёт, а копится в «опоздавших» (`take_late`), чтобы счётчики итога
-/// его не потеряли.
+/// Буфер секунд. Секунды сводятся по номеру `t` каждого агента (1-based, отсчёт от его
+/// собственного старта: агенты стартуют в разные моменты — вход в группу Kafka до 10 с, загрузка
+/// среза — и ряд выравнивается по началу нагрузки каждого, а не по часам контроллера).
+///
+/// Поток агента упорядочен по `t`, поэтому для каждого живого агента хранится наибольшая
+/// полученная `t`: секунда `t` закрывается, когда у каждого живого агента она `≥ t` (агент свою
+/// часть уже прислал или её не будет), либо когда агент выбыл (`drop_agent`). Разница в старте
+/// агентов лишь задерживает ряд на эту разницу, но в каждую секунду попадают все агенты.
+/// Запасной путь для зависшего агента — `hold`: секунда, ждущая дольше `hold` с первого тика,
+/// закрывается без него (`expire`). Закрытие секунды закрывает и все более ранние. Закрытые тики
+/// отдаются по порядку `t`, каждая секунда — один раз. Тик уже закрытой секунды (агент дослал его
+/// после зависания или переподключения) в ряд не идёт, а копится в «опоздавших» (`take_late`),
+/// чтобы счётчики итога его не потеряли.
 pub struct TickMerger {
     live: BTreeSet<String>,
+    /// Наибольшая полученная `t` по живым агентам; агента без тиков здесь нет.
+    max_t: BTreeMap<String, u64>,
     pending: BTreeMap<u64, Pending>,
     hold: Duration,
     /// Все секунды младше `next` уже закрыты.
@@ -39,6 +49,7 @@ impl TickMerger {
     pub fn new(agents: impl IntoIterator<Item = String>, hold: Duration) -> Self {
         Self {
             live: agents.into_iter().collect(),
+            max_t: BTreeMap::new(),
             pending: BTreeMap::new(),
             hold,
             next: 0,
@@ -62,13 +73,14 @@ impl TickMerger {
             .collect()
     }
 
-    /// Старшая секунда, для которой есть тики всех живых агентов.
+    /// Старшая секунда, которую каждый живой агент уже прошёл (его наибольшая `t` не меньше);
+    /// `None`, пока хоть один живой агент не прислал ни одного тика.
     fn complete_upto(&self) -> Option<u64> {
-        self.pending
+        self.live
             .iter()
-            .rev()
-            .find(|(_, p)| self.live.iter().all(|a| p.parts.contains_key(a)))
-            .map(|(t, _)| *t)
+            .map(|a| self.max_t.get(a).copied())
+            .min()
+            .flatten()
     }
 
     fn close_complete(&mut self) -> Vec<Tick> {
@@ -83,6 +95,8 @@ impl TickMerger {
         if !self.live.contains(agent) {
             return Vec::new();
         }
+        let seen = self.max_t.entry(agent.to_string()).or_insert(tick.t);
+        *seen = (*seen).max(tick.t);
         if tick.t < self.next {
             self.late.push(tick);
             return Vec::new();
@@ -98,7 +112,8 @@ impl TickMerger {
         self.close_complete()
     }
 
-    /// Закрывает секунды, которые ждут дольше `hold`.
+    /// Запасной путь для зависшего агента: закрывает секунды, которые ждут дольше `hold` с
+    /// первого полученного тика (и все более ранние).
     pub fn expire(&mut self, now: Instant) -> Vec<Tick> {
         let upto = self
             .pending
@@ -115,6 +130,7 @@ impl TickMerger {
     /// Агент потерян или завершился: его тики больше не ждут; секунды, ставшие полными, закрываются.
     pub fn drop_agent(&mut self, agent: &str) -> Vec<Tick> {
         self.live.remove(agent);
+        self.max_t.remove(agent);
         if self.live.is_empty() {
             return self.flush();
         }
@@ -162,9 +178,11 @@ pub struct Accumulator {
 impl Accumulator {
     /// Добавляет тик. `per_second_max` — наибольшее `n` одного тика: для сведённых тиков это пик
     /// всех агентов за секунду; опоздавший тик (`TickMerger::take_late`) пик не поднимает выше,
-    /// чем его собственное `n`.
+    /// чем его собственное `n`. Тики агентов нумеруются с 1, поэтому число секунд по тикам —
+    /// наибольшая `t` (вместе с хвостовым тиком после доработки — это лишь запасная оценка, см.
+    /// `fill_counters`).
     pub fn add(&mut self, tick: &Tick) {
-        self.seconds = self.seconds.max(tick.t.saturating_add(1));
+        self.seconds = self.seconds.max(tick.t);
         for o in &tick.ops {
             let c = self.ops.entry(o.id.clone()).or_default();
             c.n += o.n;
@@ -184,9 +202,13 @@ impl Accumulator {
     }
 
     /// Переносит счётчики в `totals` (гистограммы из `hist.bin` остаются); операции и сценарии
-    /// без гистограммы получают пустую. `seconds` — наибольшее из итога и тиков.
+    /// без гистограммы получают пустую. `seconds` берётся из итога агентов (`hist.bin` хранит
+    /// длительность нагрузки, которую насчитал планировщик агента: без доработки и хвоста); только
+    /// если файлов нет ни от одного агента — из тиков.
     pub fn fill_counters(&self, totals: &mut Totals) {
-        totals.seconds = totals.seconds.max(self.seconds);
+        if totals.seconds == 0 {
+            totals.seconds = self.seconds;
+        }
         for (id, c) in &self.ops {
             let e = totals.ops.entry(id.clone()).or_default();
             e.n = c.n;
@@ -210,6 +232,7 @@ impl Accumulator {
 mod tests {
     use super::*;
     use crate::agent_api::{OpTick, ScenarioTick};
+    use crate::controller::MERGE_HOLD;
     use crate::metrics::{Totals, encode_hist, new_histogram};
 
     fn op(id: &str, n: u64, p50: f64, max: f64, lag: Option<i64>) -> OpTick {
@@ -261,49 +284,44 @@ mod tests {
         tk
     }
 
+    fn pair() -> TickMerger {
+        TickMerger::new(["a".to_string(), "b".to_string()], MERGE_HOLD)
+    }
+
     #[tokio::test(start_paused = true)]
-    async fn merger_closes_a_second_when_all_live_agents_reported_or_after_hold() {
+    async fn merger_closes_a_second_once_every_live_agent_passed_it() {
         let now = tokio::time::Instant::now;
-        let mut m = TickMerger::new(["a".to_string(), "b".to_string()], Duration::from_secs(2));
-        assert!(m.push("a", tick(0, 1, 1.0, 1.0), now()).is_empty());
-        let closed = m.push("b", tick(0, 2, 1.0, 1.0), now());
-        assert_eq!(closed.len(), 1);
-        assert_eq!((closed[0].t, closed[0].ops[0].n), (0, 3));
+        let mut m = pair();
         assert!(m.push("a", tick(1, 1, 1.0, 1.0), now()).is_empty());
-        tokio::time::advance(Duration::from_secs(1)).await;
-        assert!(m.expire(now()).is_empty());
-        tokio::time::advance(Duration::from_secs(1)).await;
-        let closed = m.expire(now());
-        assert_eq!((closed.len(), closed[0].t, closed[0].ops[0].n), (1, 1, 1));
+        let closed = m.push("b", tick(1, 2, 1.0, 1.0), now());
+        assert_eq!(closed.len(), 1);
+        assert_eq!((closed[0].t, closed[0].ops[0].n), (1, 3));
+        // b пропустил секунду 3 (событие потеряно): его t = 4 закрывает и 3, и 4.
         assert!(m.push("a", tick(2, 1, 1.0, 1.0), now()).is_empty());
-        let closed = m.push("b", tick(3, 1, 1.0, 1.0), now());
-        assert!(closed.is_empty(), "секунда 3 ждёт a");
-        let closed = m.push("a", tick(3, 1, 1.0, 1.0), now());
+        assert!(m.push("a", tick(3, 1, 1.0, 1.0), now()).is_empty());
+        assert!(m.push("a", tick(4, 1, 1.0, 1.0), now()).is_empty());
+        assert_eq!(m.push("b", tick(2, 1, 1.0, 1.0), now()).len(), 1);
+        let closed = m.push("b", tick(4, 1, 1.0, 1.0), now());
         assert_eq!(
-            closed.iter().map(|t| t.t).collect::<Vec<_>>(),
-            vec![2, 3],
+            closed.iter().map(|t| (t.t, t.ops[0].n)).collect::<Vec<_>>(),
+            vec![(3, 1), (4, 2)],
             "ранняя секунда закрывается первой"
         );
-        assert!(m.push("a", tick(4, 1, 1.0, 1.0), now()).is_empty());
-        let closed = m.drop_agent("b");
+        assert!(m.push("b", tick(5, 1, 1.0, 1.0), now()).is_empty());
+        let closed = m.drop_agent("a");
         assert_eq!(
             (closed.len(), closed[0].t),
-            (1, 4),
-            "после потери b тик a закрывает секунду"
+            (1, 5),
+            "после выбытия a тик b закрывает секунду"
         );
         assert!(
-            m.push("b", tick(5, 9, 1.0, 1.0), now()).is_empty(),
-            "потерянный агент не ждётся"
+            m.push("a", tick(6, 9, 1.0, 1.0), now()).is_empty(),
+            "выбывший агент не ждётся"
         );
-        let closed = m.push("a", tick(5, 1, 1.0, 1.0), now());
+        let closed = m.push("b", tick(6, 1, 1.0, 1.0), now());
         assert_eq!((closed.len(), closed[0].ops[0].n), (1, 1));
-        assert_eq!(
-            m.push("a", tick(6, 1, 1.0, 1.0), now()).len(),
-            1,
-            "единственный живой агент закрывает секунду сразу"
-        );
-        assert!(m.drop_agent("a").is_empty() && m.flush().is_empty());
-        let mut two = TickMerger::new(["y".to_string(), "z".to_string()], Duration::from_secs(2));
+        assert!(m.drop_agent("b").is_empty() && m.flush().is_empty());
+        let mut two = TickMerger::new(["y".to_string(), "z".to_string()], MERGE_HOLD);
         two.push("z", tick(9, 1, 1.0, 1.0), now());
         assert!(two.drop_agent("z").is_empty(), "секунда 9 ждёт y");
         assert_eq!(
@@ -311,40 +329,76 @@ mod tests {
             1,
             "drop последнего агента закрывает всё"
         );
-        let mut slow = TickMerger::new(["y".to_string(), "z".to_string()], Duration::from_secs(2));
+        let mut slow = TickMerger::new(["y".to_string(), "z".to_string()], MERGE_HOLD);
         slow.push("z", tick(9, 1, 1.0, 1.0), now());
         assert_eq!(slow.flush().len(), 1, "flush закрывает неполные секунды");
     }
 
     #[tokio::test(start_paused = true)]
-    async fn merger_keeps_the_series_monotonic_and_hands_out_late_ticks() {
+    async fn merger_waits_for_an_agent_that_started_later() {
+        // b стартовал на 5 с позже a (вход в группу Kafka, загрузка среза): его t = 1 приходит,
+        // когда a уже на t = 6. Все секунды ряда содержат обоих агентов, опоздавших нет.
         let now = tokio::time::Instant::now;
-        let mut m = TickMerger::new(["a".to_string(), "b".to_string()], Duration::from_secs(2));
-        m.push("a", tick(0, 1, 1.0, 1.0), now());
-        m.push("a", tick(1, 1, 1.0, 1.0), now());
-        tokio::time::advance(Duration::from_secs(2)).await;
+        let mut m = pair();
+        let mut closed = Vec::new();
+        for s in 1..=15u64 {
+            tokio::time::advance(Duration::from_secs(1)).await;
+            if s <= 10 {
+                closed.extend(m.push("a", tick(s, 1, 1.0, 1.0), now()));
+            }
+            if s > 5 {
+                closed.extend(m.push("b", tick(s - 5, 2, 1.0, 1.0), now()));
+            }
+            closed.extend(m.expire(now()));
+        }
+        closed.extend(m.drop_agent("a"));
+        closed.extend(m.drop_agent("b"));
+        assert_eq!(
+            closed.iter().map(|t| (t.t, t.ops[0].n)).collect::<Vec<_>>(),
+            (1..=10).map(|t| (t, 3)).collect::<Vec<_>>()
+        );
+        assert!(m.take_late().is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn merger_closes_seconds_without_a_stalled_agent_after_the_hold() {
+        let now = tokio::time::Instant::now;
+        let mut m = pair();
+        assert!(m.push("a", tick(1, 1, 1.0, 1.0), now()).is_empty());
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert!(m.push("a", tick(2, 1, 1.0, 1.0), now()).is_empty());
+        tokio::time::advance(MERGE_HOLD - Duration::from_secs(2)).await;
+        assert!(m.expire(now()).is_empty(), "hold ещё не прошёл");
+        tokio::time::advance(Duration::from_secs(1)).await;
         let closed = m.expire(now());
-        assert_eq!(closed.iter().map(|t| t.t).collect::<Vec<_>>(), vec![0, 1]);
-        // b переподключился и дослал старые секунды: в ряд они не идут, но не теряются.
-        assert!(m.push("b", tick(0, 4, 1.0, 1.0), now()).is_empty());
-        assert!(m.push("b", tick(1, 5, 1.0, 1.0), now()).is_empty());
+        assert_eq!(
+            closed.iter().map(|t| (t.t, t.ops[0].n)).collect::<Vec<_>>(),
+            vec![(1, 1)],
+            "секунда 1 ждала hold и закрылась без b; секунда 2 ждёт дальше"
+        );
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let closed = m.expire(now());
+        assert_eq!(closed.iter().map(|t| t.t).collect::<Vec<_>>(), vec![2]);
+        // b ожил и дослал старые секунды: в ряд они не идут, но не теряются.
+        assert!(m.push("b", tick(1, 4, 1.0, 1.0), now()).is_empty());
+        assert!(m.push("b", tick(2, 5, 1.0, 1.0), now()).is_empty());
         let late = m.take_late();
         assert_eq!(
             late.iter().map(|t| (t.t, t.ops[0].n)).collect::<Vec<_>>(),
-            vec![(0, 4), (1, 5)]
+            vec![(1, 4), (2, 5)]
         );
         assert!(m.take_late().is_empty());
-        m.push("b", tick(2, 1, 1.0, 1.0), now());
-        let closed = m.push("a", tick(2, 1, 1.0, 1.0), now());
-        assert_eq!((closed.len(), closed[0].t, closed[0].ops[0].n), (1, 2, 2));
+        m.push("b", tick(3, 1, 1.0, 1.0), now());
+        let closed = m.push("a", tick(3, 1, 1.0, 1.0), now());
+        assert_eq!((closed.len(), closed[0].t, closed[0].ops[0].n), (1, 3, 2));
     }
 
     #[test]
     fn merger_uses_exact_histogram_merge_of_metrics() {
-        let mut m = TickMerger::new(["a".to_string(), "b".to_string()], Duration::from_secs(2));
+        let mut m = pair();
         let at = tokio::time::Instant::now();
-        m.push("a", tick_with_hist(0, &[1_000; 10]), at);
-        let closed = m.push("b", tick_with_hist(0, &[100_000; 30]), at);
+        m.push("a", tick_with_hist(1, &[1_000; 10]), at);
+        let closed = m.push("b", tick_with_hist(1, &[100_000; 30]), at);
         let x = &closed[0].ops[0];
         assert_eq!(x.n, 40);
         assert!(x.hist.is_some(), "слитая гистограмма идёт дальше");
@@ -356,8 +410,8 @@ mod tests {
     #[test]
     fn accumulator_fills_counters_into_totals() {
         let mut acc = Accumulator::default();
-        acc.add(&tick(0, 10, 1.0, 1.0));
-        acc.add(&tick(1, 30, 1.0, 1.0));
+        acc.add(&tick(1, 10, 1.0, 1.0));
+        acc.add(&tick(2, 30, 1.0, 1.0));
         let mut totals = Totals {
             ops: BTreeMap::new(),
             scenarios: BTreeMap::new(),
@@ -381,7 +435,11 @@ mod tests {
             "операция без hist.bin получает пустую гистограмму"
         );
         let s = &totals.scenarios["s"];
-        assert_eq!((s.n, s.per_second_max, totals.seconds), (40, 30, 2));
+        assert_eq!(
+            (s.n, s.per_second_max, totals.seconds),
+            (40, 30, 2),
+            "без hist.bin секунды — по тикам: t с 1, значит наибольшая t"
+        );
     }
 
     #[test]
@@ -401,12 +459,13 @@ mod tests {
         totals.seconds = 7;
         let mut acc = Accumulator::default();
         acc.add(&tick(2, 3, 1.0, 1.0));
+        acc.add(&tick(9, 0, 1.0, 1.0));
         acc.fill_counters(&mut totals);
         let x = &totals.ops["x"];
         assert_eq!((x.n, x.per_second_max, x.hist.len()), (3, 3, 1));
         assert_eq!(
             totals.seconds, 7,
-            "seconds — наибольшее из hist.bin и тиков"
+            "seconds — из hist.bin (без доработки и хвоста), а не наибольшая t тиков"
         );
     }
 }

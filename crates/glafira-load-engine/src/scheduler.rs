@@ -398,6 +398,15 @@ async fn ticker(sh: Arc<Shared>, done: CancellationToken) -> u64 {
     t
 }
 
+/// Длительность нагрузки для итога (`Totals::seconds`, знаменатель `rps_avg`): время от старта до
+/// конца таймлайна или остановки, округлённое до целых секунд, не меньше одной. Секунды доработки
+/// и хвостовой срез не входят: новые итерации в них не стартуют, а завершения начатых уже в `n`, —
+/// иначе на длинных итерациях (`kafka_consume`) `rps_avg` и `achieved_pct` занижались бы.
+/// Остановка посреди секунды округляется к ближайшей целой.
+fn load_seconds(elapsed: Duration) -> u64 {
+    (elapsed.as_secs_f64().round() as u64).max(1)
+}
+
 pub struct Scheduler;
 
 impl Scheduler {
@@ -436,7 +445,12 @@ impl Scheduler {
                 }
                 run_iteration(&sh, i, 0, &never).await;
             }
-            let tick = sh.recorder.lock().expect("recorder lock").tick(1);
+            let tick = {
+                let mut rec = sh.recorder.lock().expect("recorder lock");
+                // Смок — по итерации на сценарий, длительности у него нет: одна секунда.
+                rec.set_seconds(1);
+                rec.tick(1)
+            };
             sh.send(Event::Tick(tick)).await;
             sh.close_events();
             return if cancel.is_cancelled() {
@@ -473,6 +487,7 @@ impl Scheduler {
                 failed = true;
             }
         }
+        let load_seconds = load_seconds(sh.start.elapsed());
         // Новые итерации больше не стартуют; активные дорабатывают до `drain`, оставшиеся
         // прерываются, и `run` дожидается их завершения.
         tracker.close();
@@ -491,8 +506,12 @@ impl Scheduler {
                 sh.elapsed_secs()
             }
         };
-        // Хвост: остаток после последнего `tick`.
-        let tick = sh.recorder.lock().expect("recorder lock").tick(last_t + 1);
+        // Хвост: остаток после последнего `tick`; отдельной секундой нагрузки он не считается.
+        let tick = {
+            let mut rec = sh.recorder.lock().expect("recorder lock");
+            rec.set_seconds(load_seconds);
+            rec.tick(last_t + 1)
+        };
         sh.send(Event::Tick(tick)).await;
         sh.close_events();
         if failed {
@@ -789,6 +808,43 @@ mod tests {
         assert!(
             matches!(out.events.first(), Some(Event::Phase(p)) if p.index == 0 && p.pct == 100.0)
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn summary_rate_of_a_flat_timeline_matches_the_target() {
+        // Без задержки и с итерациями по 2,5 с (секунды доработки и хвост): знаменатель
+        // `rps_avg` — 10 секунд таймлайна, а не число срезов.
+        for delay in [None, Some(Duration::from_millis(2500))] {
+            let fake = Arc::new(Fake {
+                delay,
+                ..Default::default()
+            });
+            let out = run(
+                suite(vec![scenario("s", &[OP_A], OnFail::Stop)]),
+                config(100.0, flat(10.0, 100.0), Arrival::Constant, 1000),
+                fake.clone(),
+                CancellationToken::new(),
+            )
+            .await;
+            assert_eq!(out.status, RunStatus::Completed);
+            assert!(ticks(&out.events).len() >= 11, "{delay:?}");
+            let totals = out.recorder.lock().unwrap().finish();
+            assert_eq!(totals.seconds, 10, "{delay:?}");
+            let targets = BTreeMap::from([(OP_A.to_string(), 100.0)]);
+            let s = crate::metrics::summary(&totals, &targets, out.status);
+            let op = s.ops.iter().find(|o| o.id == OP_A).unwrap();
+            assert!((op.rps_avg - 100.0).abs() <= 2.0, "{delay:?}: {op:?}");
+            let achieved = op.achieved_pct.unwrap();
+            assert!((achieved - 100.0).abs() <= 2.0, "{delay:?}: {achieved}");
+        }
+    }
+
+    #[test]
+    fn load_seconds_rounds_to_whole_seconds_and_is_at_least_one() {
+        assert_eq!(load_seconds(Duration::from_millis(10_004)), 10);
+        assert_eq!(load_seconds(Duration::from_millis(2_600)), 3);
+        assert_eq!(load_seconds(Duration::from_millis(2_400)), 2);
+        assert_eq!(load_seconds(Duration::ZERO), 1);
     }
 
     #[tokio::test(start_paused = true)]

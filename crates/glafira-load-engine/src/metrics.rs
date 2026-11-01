@@ -160,6 +160,10 @@ impl Default for ScSecond {
 
 /// Сборщик метрик агента: шаги — по операциям, итерации — по сценариям.
 /// Планировщик держит его в `SharedRecorder`.
+///
+/// `seconds` (знаменатель `rps_avg` в [`summary`]) сборщик сам не считает: число срезов `tick`
+/// не равно длительности нагрузки — после таймлайна идут секунды доработки и хвостовой срез с
+/// остатком. Длительность задаёт планировщик через [`Recorder::set_seconds`]; без неё — `0`.
 #[derive(Debug, Default)]
 pub struct Recorder {
     ops: BTreeMap<String, (OpSecond, OpTotals)>,
@@ -254,9 +258,9 @@ impl Recorder {
         self.lag.insert(op.to_string(), lag);
     }
 
-    /// Срез секунды `t`: возвращает метрики и обнуляет посекундные счётчики.
+    /// Срез секунды `t`: возвращает метрики и обнуляет посекундные счётчики. На `seconds` итога
+    /// не влияет (см. [`Recorder::set_seconds`]).
     pub fn tick(&mut self, t: u64) -> Tick {
-        self.seconds += 1;
         let mut ops = Vec::with_capacity(self.ops.len());
         for (id, (sec, total)) in &mut self.ops {
             let sec = std::mem::take(sec);
@@ -294,6 +298,11 @@ impl Recorder {
             });
         }
         Tick { t, ops, scenarios }
+    }
+
+    /// Длительность нагрузки в секундах для итога (`Totals::seconds`).
+    pub fn set_seconds(&mut self, seconds: u64) {
+        self.seconds = seconds;
     }
 
     /// Итоги за весь прогон (посекундные остатки, не закрытые `tick`, не входят).
@@ -565,9 +574,10 @@ mod tests {
             part.record(sample(*l, None));
             part.iteration(SC, *l, None);
         }
-        whole.tick(1);
-        a.tick(1);
-        b.tick(1);
+        for r in [&mut whole, &mut a, &mut b] {
+            r.tick(1);
+            r.set_seconds(1);
+        }
         let merged = merge_totals(&[a.finish(), b.finish()]).unwrap();
         let one = whole.finish();
         assert_eq!(merged.ops[OP].hist, one.ops[OP].hist);
@@ -616,6 +626,8 @@ mod tests {
         assert_eq!(t2.ops[0].max, 0.0);
         assert!(t2.ops[0].err.is_empty());
         assert_eq!(t2.scenarios[0].n, 0);
+        assert_eq!(r.finish().seconds, 0, "срезы секунд не считает");
+        r.set_seconds(2);
         let totals = r.finish();
         assert_eq!(totals.seconds, 2);
         assert_eq!(totals.ops[OP].n, 3);
@@ -651,6 +663,7 @@ mod tests {
                 r.tick(i / 100 + 1);
             }
         }
+        r.set_seconds(10);
         let totals = r.finish();
         assert_eq!(totals.seconds, 10);
         let targets = BTreeMap::from([(OP.to_string(), 200.0)]);

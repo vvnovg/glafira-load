@@ -1028,6 +1028,39 @@ mod tests {
         assert!(ticks >= 2, "ticks = {ticks}");
     }
 
+    /// Ровная полка 6 с на 20 RPS: `summary.yaml` даёт `rps_avg` ≈ цели и `achieved_pct` ≈ 100
+    /// (хвостовой срез после доработки секундой нагрузки не считается).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn local_run_summary_rate_matches_the_target() {
+        let http = stub().await;
+        let tmp = project(&http, 0.1);
+        let out = tmp.path().join("out");
+        let (tx, mut rx) = mpsc::channel(4096);
+        let drain = tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let res = run_local(
+            request(tmp.path(), "quick", Mode::Run, Some(out.clone())),
+            tx,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        drain.await.unwrap();
+        assert_eq!(res.status, RunStatus::Completed);
+        let summary: AgentSummary = glafira_load_model::from_yaml(
+            &std::fs::read_to_string(out.join("summary.yaml")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(summary.seconds, 6);
+        let post = summary
+            .ops
+            .iter()
+            .find(|o| o.id == "http:orders:POST /v1/orders")
+            .unwrap();
+        assert!((post.rps_avg - 20.0).abs() <= 0.4, "{post:?}");
+        let achieved = post.achieved_pct.unwrap();
+        assert!((achieved - 100.0).abs() <= 2.0, "{achieved}");
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cancel_stops_the_run_with_status_stopped() {
         let http = stub().await;

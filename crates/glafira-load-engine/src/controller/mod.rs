@@ -45,8 +45,16 @@ pub const CONTROLLER_VERSION: &str = crate::agent_link::VERSION;
 pub const LOST_AFTER: Duration = Duration::from_secs(30);
 /// Пауза между повторными подключениями к потоку событий.
 pub const RECONNECT_PAUSE: Duration = Duration::from_secs(1);
-/// Сколько держать секунду в буфере слияния, если тик кого-то из живых агентов не пришёл.
-pub const MERGE_HOLD: Duration = Duration::from_secs(2);
+/// Запасной срок буфера слияния (`TickMerger`): секунда, которую кто-то из живых агентов ещё не
+/// прошёл, закрывается без него через столько после её первого тика. Обычно секунда закрывается
+/// раньше — как только все живые агенты прислали тики с этой `t` или старше; срок нужен только для
+/// зависшего агента. Больше разницы в старте агентов (ожидание назначения партиций Kafka до 10 с
+/// плюс загрузка среза), чтобы поздно стартовавший агент не выпадал из ряда, и меньше `LOST_AFTER`.
+pub const MERGE_HOLD: Duration = Duration::from_secs(15);
+const _: () = assert!(
+    MERGE_HOLD.as_secs() > crate::kafka::ASSIGNMENT_WAIT.as_secs()
+        && MERGE_HOLD.as_secs() < LOST_AFTER.as_secs()
+);
 /// Как часто проверять буфер слияния на просроченные секунды.
 const EXPIRE_EVERY: Duration = Duration::from_millis(500);
 /// Сколько раз спрашивать файлы у агента, пока он отвечает `AGENT_BUSY` (прогон ещё не ушёл

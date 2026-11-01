@@ -1822,4 +1822,72 @@ mod tests {
             r#"{"type":"started","run_id":"r1","dir":"/tmp/r1"}"#
         );
     }
+
+    /// Путь контроллера: два встроенных агента с мгновенным исполнителем, ровный таймлайн 3 с
+    /// на 100 RPS (срезы 1:2 по весам плана) → `rps_avg` сводки ≈ цели, `achieved_pct` ≈ 100.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn controller_summary_rate_of_a_flat_timeline_matches_the_target() {
+        use crate::controller::{Controller, bundle};
+        use glafira_load_model::profile::{Point, Target};
+        use glafira_load_model::registry::OpKind;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut plan = bundle::tests::plan(tmp.path().to_path_buf());
+        // Ровный поток: по умолчанию сьют пуассоновский, и 3 с дали бы разброс в проценты.
+        let text = KAFKA_SUITE.replace("scenarios:", "defaults: { arrival: constant }\nscenarios:");
+        plan.suite = suite::parse(&text).unwrap();
+        plan.suite_text = text;
+        plan.computed.targets = vec![Target {
+            id: "kafka_produce:t".into(),
+            service: "orders".into(),
+            kind: OpKind::KafkaProduce,
+            basis_value: 100.0,
+            k_env: 1.0,
+            k_growth: 1.0,
+            target: 100.0,
+            share: 1.0,
+        }];
+        plan.computed.total = 100.0;
+        plan.computed.timeline = vec![
+            Point {
+                minute: 0.0,
+                pct: 100.0,
+            },
+            Point {
+                minute: 0.05,
+                pct: 100.0,
+            },
+        ];
+        plan.computed.total_minutes = 0.05;
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let agents: Vec<Arc<dyn AgentLink>> = ["a", "b"]
+            .iter()
+            .map(|id| {
+                Arc::new(LocalAgent::new(
+                    id,
+                    counting_factory(calls.clone(), false, None),
+                )) as Arc<dyn AgentLink>
+            })
+            .collect();
+        let (tx, mut rx) = mpsc::channel(4096);
+        let drain = tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let result = Controller::run(plan, agents, tx, CancellationToken::new())
+            .await
+            .unwrap();
+        drain.await.unwrap();
+        assert_eq!(result.status, RunStatus::Completed);
+        assert_eq!(result.summary.seconds, 3, "доработка и хвост не входят");
+        let op = &result.summary.ops[0];
+        assert_eq!(op.id, "kafka_produce:t");
+        assert_eq!(op.n, calls.load(std::sync::atomic::Ordering::SeqCst) as u64);
+        assert!((op.rps_avg - 100.0).abs() <= 2.0, "{op:?}");
+        let achieved = op.achieved_pct.unwrap();
+        assert!((achieved - 100.0).abs() <= 2.0, "{achieved}");
+        let file: crate::agent_api::AgentSummary = glafira_load_model::from_yaml(
+            &std::fs::read_to_string(std::path::Path::new(&result.dir).join(SUMMARY_FILE)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(file.seconds, 3);
+        assert_eq!(file.ops[0].n, op.n);
+    }
 }

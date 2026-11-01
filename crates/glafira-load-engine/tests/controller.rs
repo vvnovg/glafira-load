@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::stream::{self, BoxStream, StreamExt};
@@ -202,6 +203,8 @@ struct MockAgent {
     starts: AtomicUsize,
     stops: AtomicUsize,
     events_calls: Mutex<Vec<Option<u64>>>,
+    /// Темп потока событий: пауза перед первым событием и между событиями (по умолчанию — сразу).
+    pace: Option<(Duration, Duration)>,
 }
 
 impl MockAgent {
@@ -223,6 +226,7 @@ impl MockAgent {
             starts: AtomicUsize::new(0),
             stops: AtomicUsize::new(0),
             events_calls: Mutex::new(vec![]),
+            pace: None,
         }
     }
 
@@ -238,8 +242,8 @@ impl MockAgent {
                         pct: 0.0,
                     }),
                 ),
-                (2, tick(0, 10)),
-                (3, tick(1, 10)),
+                (2, tick(1, 10)),
+                (3, tick(2, 10)),
                 (4, done(20)),
             ],
         )
@@ -271,7 +275,15 @@ impl AgentLink for MockAgent {
         self.events_calls.lock().unwrap().push(last_id);
         let next = self.streams.lock().unwrap().pop_front();
         match next {
-            Some(Ok(items)) => Ok(stream::iter(items).boxed()),
+            Some(Ok(items)) => match self.pace {
+                None => Ok(stream::iter(items).boxed()),
+                Some((first, every)) => Ok(stream::iter(items.into_iter().enumerate())
+                    .then(move |(i, item)| async move {
+                        tokio::time::sleep(if i == 0 { first } else { every }).await;
+                        item
+                    })
+                    .boxed()),
+            },
             Some(Err(e)) => Err(e),
             None => Err(LinkError::new("AGENT_UNREACHABLE", "no more streams")),
         }
@@ -368,7 +380,7 @@ async fn two_agents_complete_and_summary_sums_n() {
             _ => None,
         })
         .collect();
-    assert_eq!(ticks, vec![0, 1], "one merged second per t");
+    assert_eq!(ticks, vec![1, 2], "one merged second per t");
     let merged_n: u64 = events
         .iter()
         .filter_map(|e| match e {
@@ -553,7 +565,7 @@ async fn existing_run_folder_stops_the_started_agents() {
 #[tokio::test(start_paused = true)]
 async fn lost_agent_makes_the_run_incomplete_and_keeps_other_files() {
     let tmp = tempfile::tempdir().unwrap();
-    let flaky = MockAgent::new("a", vec![(1, tick(0, 10))]);
+    let flaky = MockAgent::new("a", vec![(1, tick(1, 10))]);
     flaky
         .streams
         .lock()
@@ -593,7 +605,7 @@ async fn lost_agent_makes_the_run_incomplete_and_keeps_other_files() {
             _ => None,
         })
         .collect();
-    assert_eq!(ticks, vec![0, 1], "the series has no repeated t");
+    assert_eq!(ticks, vec![1, 2], "the series has no repeated t");
 }
 
 #[tokio::test]
@@ -626,7 +638,7 @@ async fn gap_and_errors_are_recorded() {
     let (_, la) = link(MockAgent::new(
         "a",
         vec![
-            (1, tick(0, 5)),
+            (1, tick(1, 5)),
             (2, error("a")),
             (3, Event::Gap),
             (4, done(5)),
@@ -662,7 +674,7 @@ async fn error_samples_are_capped_across_agents() {
     let tmp = tempfile::tempdir().unwrap();
     let errors = |id: &str| {
         let mut ev: Vec<(u64, Event)> = (1..=4).map(|i| (i, error(id))).collect();
-        ev.push((5, tick(0, 4)));
+        ev.push((5, tick(1, 4)));
         ev.push((6, done(4)));
         MockAgent::new(id, ev)
     };
@@ -737,4 +749,49 @@ async fn busy_files_are_retried_and_only_flat_entries_are_unpacked() {
     );
     assert!(!out.join("agents/escape.txt").exists());
     assert!(!tmp.path().join("out/escape.txt").exists());
+}
+
+/// Агент, который отдаёт `seconds` тиков по `n` раз в секунду, начиная через `start` (имитация
+/// позднего старта: вход в группу Kafka, загрузка среза), затем `done`.
+fn paced(id: &str, start: Duration, seconds: u64, n: u64) -> MockAgent {
+    let mut events: Vec<(u64, Event)> = (1..=seconds).map(|t| (t, tick(t, n))).collect();
+    events.push((seconds + 1, done(seconds * n)));
+    let mut agent = MockAgent::new(id, events);
+    agent.pace = Some((start, Duration::from_secs(1)));
+    agent
+}
+
+#[tokio::test(start_paused = true)]
+async fn agents_started_seconds_apart_are_merged_into_every_second() {
+    let tmp = tempfile::tempdir().unwrap();
+    // b начинает на 5 с позже a: при старом сроке слияния 2 с весь ряд b уходил в «опоздавшие».
+    let (_, la) = link(paced("a", Duration::from_secs(1), 10, 10));
+    let (_, lb) = link(paced("b", Duration::from_secs(6), 10, 7));
+    let (tx, rx) = mpsc::channel(256);
+    let events = tokio::spawn(drain(rx));
+    let result = Controller::run(plan(tmp.path()), vec![la, lb], tx, CancellationToken::new())
+        .await
+        .unwrap();
+    let events = events.await.unwrap();
+    assert_eq!(result.status, RunStatus::Completed);
+    let series: Vec<(u64, u64)> = events
+        .iter()
+        .filter_map(|e| match e {
+            ControllerEvent::Tick(t) => Some((t.t, t.ops[0].n)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        series,
+        (1..=10).map(|t| (t, 17)).collect::<Vec<_>>(),
+        "every second holds both agents"
+    );
+    let metrics = std::fs::read_to_string(Path::new(&result.dir).join("metrics.jsonl")).unwrap();
+    let rows: Vec<serde_json::Value> = metrics
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    assert_eq!(rows.len(), 10, "{metrics}");
+    assert!(rows.iter().all(|r| r["n"] == 17), "{metrics}");
+    assert_eq!(result.summary.ops[0].n, 170, "summary and series agree");
 }

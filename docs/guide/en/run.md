@@ -43,8 +43,9 @@ When the run ends, the [[ui:run.summary.title]] table shows every operation: req
 of errors, dropped, p50, p95, p99, max, the target from the profile and the achieved percentage; the columns sort by
 click. [[ui:run.summary.openFolder]] opens the folder of the run. The statuses: [[ui:run.runStatus.completed]],
 [[ui:run.runStatus.stopped]], [[ui:run.runStatus.incomplete]] (an agent was lost or its files were not collected) and
-[[ui:run.runStatus.failed]]. The achieved percentage is the average RPS over the whole run divided by the target, so a
-ramp phase lowers it; compare the steady phase in `metrics.jsonl` when you need the exact figure.
+[[ui:run.runStatus.failed]]. The achieved percentage is the average RPS over the profile time (the drain seconds after
+its end do not count) divided by the target, so a ramp phase lowers it; compare the steady phase in `metrics.jsonl` when
+you need the exact figure.
 
 The folder is `runs/<date-time>/` in the project (UTC, for example `runs/2026-11-02T14-30-00/`), kept out of git by
 the `.gitignore` that Glafira writes when it creates a project:
