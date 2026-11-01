@@ -1,0 +1,38 @@
+[package]
+name = "glafira-load-cli"
+version = "0.2.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Glafira for Load Testing: CLI `glafira-load` and the load agent"
+
+[lib]
+name = "glafira_load_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "glafira-load"
+path = "src/main.rs"
+
+[dependencies]
+glafira-load-model = { path = "../glafira-load-model" }
+glafira-load-engine = { path = "../glafira-load-engine" }
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs", "sync", "time", "net"] }
+tokio-util = "0.7"
+axum = { version = "0.8", features = ["multipart"] }
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tar = "0.4"
+time = { version = "0.3", features = ["formatting"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+dunce = "1"
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+tempfile = "3"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "multipart", "stream"] }
+eventsource-stream = "0.2"

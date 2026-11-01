@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["src-tauri", "crates/glafira-load-model", "crates/glafira-load-contracts", "crates/glafira-load-xlsx", "crates/glafira-load-engine"]
+members = ["src-tauri", "crates/glafira-load-model", "crates/glafira-load-contracts", "crates/glafira-load-xlsx", "crates/glafira-load-engine", "crates/glafira-load-cli"]
 
 [workspace.package]
 edition = "2024"
