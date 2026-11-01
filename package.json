@@ -1,7 +1,7 @@
 {
   "name": "glafira-load-testing",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
@@ -13,7 +13,8 @@
     "test": "vitest run",
     "test:scripts": "node --test \"scripts/*.test.mjs\"",
     "i18n:check": "node scripts/i18n-check.mjs --rust-cyrillic src-tauri/src crates",
-    "guide:publish": "node scripts/guide-publish.mjs dist/guide"
+    "guide:publish": "node scripts/guide-publish.mjs dist/guide",
+    "check:version": "node scripts/check-version.mjs"
   },
   "dependencies": {
     "@floating-ui/react": "^0.27.20",
