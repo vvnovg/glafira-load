@@ -7,6 +7,7 @@ import { RELEASES_DOWNLOAD_URL } from "../../lib/links";
  */
 export function agentInstallCommand(info: Pick<AppInfo, "os" | "arch" | "version">): string {
   const base = `${RELEASES_DOWNLOAD_URL}/v${info.version}/glafira-load-${info.os}-${info.arch}`;
-  if (info.os === "windows") return `curl.exe -L ${base}.exe -o glafira-load.exe`;
-  return `curl -L ${base} -o /usr/local/bin/glafira-load && chmod +x /usr/local/bin/glafira-load`;
+  // -f: на 404 (нет такой сборки в релизе) curl завершается с ошибкой, а не сохраняет страницу ошибки как бинарник.
+  if (info.os === "windows") return `curl.exe -fL ${base}.exe --create-dirs -o C:\\glafira-load\\glafira-load.exe`;
+  return `sudo curl -fL ${base} -o /usr/local/bin/glafira-load && sudo chmod +x /usr/local/bin/glafira-load`;
 }
