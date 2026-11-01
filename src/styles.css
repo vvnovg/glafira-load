@@ -236,3 +236,4 @@ fieldset.plain { margin: 0; padding: 0; border: none; min-width: 0; }
 .run-live progress { width: 100%; }
 .charts h4 { margin: 8px 0 0; }
 th button.sort { font-weight: 600; color: inherit; }
+.charts .row label.inline { flex-direction: row; align-items: center; gap: 4px; color: inherit; }
