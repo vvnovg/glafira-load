@@ -13,6 +13,8 @@ vi.mock("../api/client", () => ({
     getPolicyStatus: vi.fn(async () => ({ managed: false, source: null, updatesEnabled: false, updateUrl: null, language: null, errors: [] })),
     checkUpdate: vi.fn(async () => ({ status: "disabled", reason: { key: "errors.updates.notConfigured", params: {}, text: "x" } })),
     projectRecent: vi.fn(async () => []),
+    suiteGet: vi.fn(async () => ({ name: "orders", file: "suites/orders/suite.yaml", text: "", suite: null, findings: [], lines: {} })),
+    suiteCheck: vi.fn(async () => ({ findings: [], coverage: null, profile: "nominal" })),
   },
   toAppError: (e: unknown) => e,
   isAppError: () => false,
@@ -34,7 +36,7 @@ describe("Layout", () => {
     renderWithClient(<Layout />);
     act(() => useWorkspace.getState().open({ kind: "suite", path: "/home/u/orders-load", name: "orders" }));
     // Вкладка сьюта — ленивый чанк: панель появляется после загрузки.
-    expect(await screen.findByRole("heading", { name: "Сьют orders" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /^Сьют orders/ })).toBeInTheDocument();
     act(() => useWorkspace.getState().open({ kind: "run", path: "/home/u/orders-load" }));
     expect(await screen.findByRole("tab", { name: "orders-load · orders" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "orders-load · Прогон" })).toBeInTheDocument();

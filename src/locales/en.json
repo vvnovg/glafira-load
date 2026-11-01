@@ -190,6 +190,10 @@
     "profile": {
       "title": "Target RPS = production figure × k_env × k_growth; the share is its part of the sum. Phases set how the load changes over time; the runner (stage L2) executes them as is.",
       "coefficients": "k_env — the stand's capacity relative to production, k_growth — the growth margin. An operation override wins over a service one, a service one over the global."
+    },
+    "suite": {
+      "title": "The suite is a YAML file you edit by hand; this tab shows and checks it and compares it with the profile. Edits on disk are picked up by «Check» and when the window regains focus.",
+      "coverage": "Planned RPS = Σ over scenarios of scenario rate × steps with the operation. A delta over 10 % of the target is highlighted; active operations without steps are not covered."
     }
   },
   "sidebar": {
@@ -541,7 +545,50 @@
     }
   },
   "suite": {
-    "title": "Suite {{name}}"
+    "title": "Suite {{name}}",
+    "openFile": "Open file",
+    "check": "Check",
+    "create": "Create suite…",
+    "scenarios": "Scenarios",
+    "steps": "steps: {{n}}",
+    "drives": "drives {{operation}}",
+    "onFail": {
+      "stop": "stop on failure",
+      "continue": "continue on failure"
+    },
+    "checks": "checks: {{n}}",
+    "selectStep": "Select a step to see its YAML",
+    "line": "line {{line}}",
+    "noSuite": "The suite did not parse: see the check report",
+    "findings": "Check report",
+    "noFindings": "No problems found",
+    "level": {
+      "error": "error",
+      "warning": "warning"
+    },
+    "column": {
+      "level": "Level",
+      "where": "File:line",
+      "message": "Message",
+      "operation": "Operation",
+      "kind": "Kind",
+      "target": "Target RPS",
+      "planned": "Planned RPS",
+      "delta": "Delta"
+    },
+    "coverageTitle": "Coverage of profile {{profile}}",
+    "uncovered": "Not covered: {{n}}",
+    "noCoverage": "No coverage yet: fix the errors first",
+    "dialog": {
+      "title": "New suite",
+      "name": "Suite name",
+      "badName": "a–z, 0–9 and hyphen, up to 64 characters",
+      "search": "Search operations",
+      "operations": "Operations",
+      "selected": "Selected: {{n}}",
+      "noOperations": "No active operations in the registry: scan a service first",
+      "create": "Create"
+    }
   },
   "run": {
     "title": "Run"

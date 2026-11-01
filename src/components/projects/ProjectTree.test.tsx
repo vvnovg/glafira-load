@@ -15,6 +15,7 @@ const api = vi.hoisted(() => ({
   projectView: vi.fn(async (path: string) => ({ path, manifest: { format: 1, name: "Orders platform", services: [{ id: "orders", name: "Orders", path: "../orders", contracts: [] }], environments: [] }, problems: [], readOnly: false, missingServices: [] })),
   projectClose: vi.fn(async () => undefined),
   suiteList: vi.fn(async (_path: string) => [{ name: "orders-flow", file: "suites/orders-flow/suite.yaml", scenarios: 2 }]),
+  registryList: vi.fn(async () => []),
 }));
 vi.mock("../../api/client", () => ({ api, toAppError: (e: unknown) => e }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(async () => "/p/new") }));
@@ -43,6 +44,16 @@ describe("ProjectTree", () => {
     // Раскрытие узла только читает манифест: список недавних не переупорядочивается.
     expect(api.projectView).toHaveBeenCalledWith("/p/orders");
     expect(api.projectOpen).not.toHaveBeenCalled();
+  });
+
+  it("opens the create-suite dialog from the suites node", async () => {
+    renderWithClient(<ProjectTree />);
+    await screen.findByRole("button", { name: "orders-flow" });
+    await userEvent.click(screen.getByRole("button", { name: "Создать сьют" }));
+    expect(screen.getByRole("dialog", { name: "Новый сьют" })).toBeInTheDocument();
+    expect(api.registryList).toHaveBeenCalledWith("/p/orders", { status: "active" });
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("lists suites under the project and opens the suite and run tabs", async () => {

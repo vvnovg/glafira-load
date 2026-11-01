@@ -7,6 +7,7 @@ import type { RecentProject } from "../../api/types";
 import { baseName } from "../../lib/paths";
 import { type TabSpec, useWorkspace } from "../../state/workspace";
 import { ErrorBanner } from "../common/ErrorBanner";
+import { CreateSuiteDialog } from "../suites/CreateSuiteDialog";
 
 const COLLAPSED_KEY = "glafira-load.tree.collapsed";
 
@@ -35,6 +36,7 @@ function ProjectNode({ project, collapsed, onToggle }: { project: RecentProject;
   const open = useWorkspace((s) => s.open);
   const closeForProject = useWorkspace((s) => s.closeForProject);
   const expanded = !collapsed && !project.missing;
+  const [creating, setCreating] = useState(false);
   const manifest = useQuery({ queryKey: ["project", project.path], queryFn: () => api.projectView(project.path), enabled: expanded });
   const suites = useQuery({ queryKey: ["suites", project.path], queryFn: () => api.suiteList(project.path), enabled: expanded });
   const remove = useMutation({
@@ -88,6 +90,9 @@ function ProjectNode({ project, collapsed, onToggle }: { project: RecentProject;
           <li role="treeitem" aria-label={t("sidebar.suites")}>
             <div className="tree-conn">
               <span className="muted">{t("sidebar.suites")}</span>
+              <button type="button" className="icon" aria-label={t("sidebar.createSuite")} title={t("sidebar.createSuite")} onClick={() => setCreating(true)}>
+                +
+              </button>
             </div>
             <ul role="group" className="tree">
               {(suites.data ?? []).map((s) => (
@@ -103,6 +108,7 @@ function ProjectNode({ project, collapsed, onToggle }: { project: RecentProject;
           {section({ kind: "run", path: project.path }, t("sidebar.run"))}
         </ul>
       )}
+      {creating && <CreateSuiteDialog path={project.path} onClose={() => setCreating(false)} />}
       {manifest.error && <ErrorBanner error={manifest.error} />}
       {suites.error && <ErrorBanner error={suites.error} onRetry={() => suites.refetch()} />}
       {remove.error && <ErrorBanner error={remove.error} />}
