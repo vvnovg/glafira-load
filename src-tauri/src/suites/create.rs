@@ -251,8 +251,15 @@ fn step_for(op: &Operation, id: String) -> AppResult<Step> {
     })
 }
 
+/// `<base>-<n>` не длиннее 64 символов: база укорачивается под суффикс (без висящего `-`).
+fn with_suffix(base: &str, n: usize) -> String {
+    let suffix = format!("-{n}");
+    let head: String = base.chars().take(64 - suffix.len()).collect();
+    format!("{}{suffix}", head.trim_end_matches('-'))
+}
+
 /// Сьют: сценарий на операцию в порядке `ids`; `id` сценария и шага — из адреса операции,
-/// повторы получают суффикс `-2`, `-3`, ….
+/// повторы получают суффикс `-2`, `-3`, … (общая длина не больше 64; занятый id пропускается).
 pub fn build(name: &str, registry: &Registry, ids: &[String]) -> AppResult<Suite> {
     let mut scenarios = Vec::new();
     let mut used = BTreeSet::new();
@@ -263,7 +270,7 @@ pub fn build(name: &str, registry: &Registry, ids: &[String]) -> AppResult<Suite
         let mut n = 1;
         while !used.insert(sid.clone()) {
             n += 1;
-            sid = format!("{base}-{n}");
+            sid = with_suffix(&base, n);
         }
         let step = step_for(op, sid.clone())?;
         scenarios.push(Scenario {
@@ -584,6 +591,28 @@ mod tests {
             (e.code, e.key.as_str()),
             (ErrorCode::InvalidInput, "errors.suite.unsupportedKind")
         );
+    }
+
+    #[test]
+    fn suffixed_ids_stay_within_64_chars_and_unique() {
+        let long = format!("/{}", "a".repeat(80));
+        let mut r = Registry::default();
+        r.operations.extend([
+            http("GET", &format!("{long}/x")),
+            http("GET", &format!("{long}/y")),
+        ]);
+        r.sort();
+        let ids: Vec<String> = r.operations.iter().map(|o| o.draft.id.clone()).collect();
+        // Дважды каждая: у всех четырёх slug совпадает на первых 64 символах.
+        let all = [ids.clone(), ids].concat();
+        let suite = build("x", &r, &all).unwrap();
+        let sids: Vec<&str> = suite.scenarios.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(sids.len(), 4);
+        assert!(sids.iter().all(|s| s.len() <= 64), "{sids:?}");
+        assert_eq!(sids.iter().collect::<BTreeSet<_>>().len(), 4, "{sids:?}");
+        assert!(sids.iter().all(|s| !s.ends_with('-')), "{sids:?}");
+        assert_eq!(with_suffix(&format!("{}-b", "a".repeat(62)), 2).len(), 64);
+        assert_eq!(with_suffix("ab-", 12), "ab-12");
     }
 
     #[test]

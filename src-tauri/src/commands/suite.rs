@@ -57,16 +57,22 @@ pub fn default_profile(d: &ProjectDir) -> AppResult<String> {
     })
 }
 
-/// Сьюты проекта по алфавиту; у неразобранного сьюта `scenarios = 0`.
+/// Сьюты проекта по алфавиту; у неразобранного сьюта `scenarios = 0`, нечитаемый сьют
+/// (файл вне проекта по ссылке, ошибка чтения) пропускается с предупреждением в журнале.
 #[tauri::command]
 pub async fn suite_list(path: String) -> AppResult<Vec<SuiteMeta>> {
     blocking(move || {
         let d = ProjectDir::open(&path)?;
         let mut out = Vec::new();
         for name in list_names(&d)? {
-            let scenarios = parse(&read_suite(&d, &name)?)
-                .map(|s| s.scenarios.len())
-                .unwrap_or(0);
+            let text = match read_suite(&d, &name) {
+                Ok(text) => text,
+                Err(e) => {
+                    tracing::warn!(suite = %name, error = %e.message, "suite skipped in the list");
+                    continue;
+                }
+            };
+            let scenarios = parse(&text).map(|s| s.scenarios.len()).unwrap_or(0);
             out.push(SuiteMeta {
                 file: suite_file(&name),
                 name,
@@ -101,15 +107,26 @@ pub async fn suite_get(path: String, name: String) -> AppResult<SuiteView> {
     .await
 }
 
-/// `check` и покрытие профиля (`nominal` либо первый по алфавиту).
+/// `check` и покрытие профиля (`nominal` либо первый по алфавиту); профиль, который не
+/// читается или не считается, — `coverage: None` с сохранёнными находками.
 #[tauri::command]
 pub async fn suite_check(path: String, name: String) -> AppResult<CheckReport> {
     blocking(move || {
         let d = ProjectDir::open(&path)?;
         let c = load_checked(&d, &name, None)?;
-        let profile = default_profile(&d)?;
+        // Нечитаемый профиль не должен прятать находки `check`: покрытие просто пропускается.
+        let profile = default_profile(&d).unwrap_or_else(|e| {
+            tracing::warn!(error = %e.message, "coverage skipped: profile file unreadable");
+            String::new()
+        });
         let coverage = match &c.suite {
-            Some(suite) if !profile.is_empty() => Some(coverage(suite, &calculate(&d, &profile)?)),
+            Some(suite) if !profile.is_empty() => match calculate(&d, &profile) {
+                Ok(calc) => Some(coverage(suite, &calc)),
+                Err(e) => {
+                    tracing::warn!(%profile, error = %e.message, "coverage skipped: profile not calculated");
+                    None
+                }
+            },
             _ => None,
         };
         Ok(CheckReport {
@@ -325,6 +342,103 @@ pub(crate) mod tests {
                 .unwrap_err()
                 .code,
             ErrorCode::NotFound
+        );
+    }
+
+    #[tokio::test]
+    async fn list_skips_an_unreadable_suite() {
+        let (_tmp, path) = copy_fixture_project();
+        let d = ProjectDir::open(&path).unwrap();
+        // Файл без прав чтения: в списке сьют есть, а прочитать его нельзя.
+        d.write_text("suites/bogus/suite.yaml", "format: 1\n")
+            .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let f = d.file("suites/bogus/suite.yaml");
+            std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o000)).unwrap();
+        }
+        let list = suite_list(path).await.unwrap();
+        let names: Vec<&str> = list.iter().map(|m| m.name.as_str()).collect();
+        assert!(names.contains(&"orders"), "{names:?}");
+        // Под root права не действуют и сьют читается; иначе он пропущен.
+        #[cfg(unix)]
+        assert!(names.len() <= 2, "{names:?}");
+    }
+
+    #[tokio::test]
+    async fn check_keeps_findings_when_the_profile_is_broken() {
+        let (_tmp, path) = copy_fixture_project();
+        let d = ProjectDir::open(&path).unwrap();
+        let findings_before = suite_check(path.clone(), "orders".into())
+            .await
+            .unwrap()
+            .findings
+            .len();
+        // Профиль читается, но не считается.
+        let mut f = d.profile().unwrap();
+        f.coefficients.k_env = -1.0;
+        d.save_profile(&f).unwrap();
+        let report = suite_check(path.clone(), "orders".into()).await.unwrap();
+        assert!(report.coverage.is_none());
+        assert_eq!(report.profile, "nominal");
+        assert_eq!(report.findings.len(), findings_before);
+        // Файл профиля не разбирается.
+        d.write_text("load/profile.yaml", "profiles: [\n").unwrap();
+        let report = suite_check(path, "orders".into()).await.unwrap();
+        assert!(report.coverage.is_none() && report.profile.is_empty());
+        assert_eq!(report.findings.len(), findings_before);
+    }
+
+    #[tokio::test]
+    async fn long_operation_slugs_give_valid_unique_scenario_ids() {
+        use glafira_load_model::registry::{Address, OperationDraft, Source};
+        let (_tmp, path) = copy_fixture_project();
+        let d = ProjectDir::open(&path).unwrap();
+        let long = format!("/{}", "a".repeat(80));
+        let mut ids = Vec::new();
+        let mut r = d.registry().unwrap();
+        for tail in ["x", "y"] {
+            let draft = OperationDraft::new(
+                "orders",
+                OpKind::Http,
+                Address::Http {
+                    method: "GET".into(),
+                    path: format!("{long}/{tail}"),
+                },
+                Source::manual(),
+            );
+            ids.push(draft.id.clone());
+            r.operations.push(glafira_load_model::registry::Operation {
+                fingerprint: draft.fingerprint(),
+                draft,
+                status: glafira_load_model::registry::Status::Active,
+                first_seen: Default::default(),
+                last_seen: Default::default(),
+                manual: Default::default(),
+            });
+        }
+        r.sort();
+        d.save_registry(&r).unwrap();
+        suite_create(path.clone(), "long".into(), ids)
+            .await
+            .unwrap();
+        let view = suite_get(path.clone(), "long".into()).await.unwrap();
+        let sids: Vec<String> = view
+            .suite
+            .unwrap()
+            .scenarios
+            .iter()
+            .map(|s| s.id.clone())
+            .collect();
+        assert_eq!(sids.len(), 2);
+        assert!(sids.iter().all(|s| s.len() <= 64), "{sids:?}");
+        assert_ne!(sids[0], sids[1]);
+        let report = suite_check(path, "long".into()).await.unwrap();
+        assert!(
+            errors(&report.findings).is_empty(),
+            "{:?}",
+            errors(&report.findings)
         );
     }
 

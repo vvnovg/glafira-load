@@ -3,9 +3,9 @@
 use tauri::State;
 
 use super::blocking;
-use crate::agents::probe::{AgentStatus, probe_all};
+use crate::agents::probe::{AgentStatus, ProbeState, probe_all};
 use crate::agents::{env_of, no_agent, token_key};
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::project::manifest::ProjectDir;
 use crate::state::AppState;
 
@@ -48,6 +48,8 @@ pub async fn agent_set_token(
 }
 
 /// Опрос всех агентов стенда: токены читаются в блокирующей задаче, запросы идут параллельно.
+/// Ошибка хранилища при чтении токена одного агента не валит опрос: этот агент —
+/// `unreachable` с причиной в `message`, остальные опрашиваются как обычно.
 pub async fn probe(st: &AppState, path: String, env_id: String) -> AppResult<Vec<AgentStatus>> {
     let st = st.clone();
     let (agents, tokens) = blocking(move || {
@@ -57,11 +59,34 @@ pub async fn probe(st: &AppState, path: String, env_id: String) -> AppResult<Vec
             .agents
             .iter()
             .map(|a| st.secrets.get(&token_key(d.root(), &env_id, &a.id)))
-            .collect::<AppResult<Vec<_>>>()?;
+            .collect::<Vec<_>>();
         Ok((env.agents, tokens))
     })
     .await?;
-    Ok(probe_all(&agents, tokens).await)
+    // Агент с ошибкой хранилища идёт в опрос как «без токена» (запроса не будет), затем его
+    // статус заменяется на `unreachable` с причиной.
+    let failures: Vec<Option<String>> = tokens
+        .iter()
+        .map(|t| t.as_ref().err().map(store_error_text))
+        .collect();
+    let tokens = tokens.into_iter().map(|t| t.ok().flatten()).collect();
+    let mut out = probe_all(&agents, tokens).await;
+    for (status, failure) in out.iter_mut().zip(failures) {
+        if let Some(message) = failure {
+            status.state = ProbeState::Unreachable;
+            status.info = None;
+            status.message = Some(message);
+        }
+    }
+    Ok(out)
+}
+
+/// Технический текст ошибки хранилища токенов для `AgentStatus.message`.
+fn store_error_text(e: &AppError) -> String {
+    match &e.details {
+        Some(d) => format!("{}: {d}", e.message),
+        None => e.message.clone(),
+    }
 }
 
 #[tauri::command]
@@ -82,8 +107,36 @@ mod tests {
     };
     use crate::error::ErrorCode;
     use crate::project::manifest::create;
-    use crate::storage::secrets::MemoryStore;
+    use crate::storage::secrets::{MemoryStore, SecretStore};
     use std::sync::Arc;
+
+    /// Хранилище, которое не читает ключи, оканчивающиеся на `fail`; остальное — как `MemoryStore`.
+    #[derive(Default)]
+    struct FlakyStore {
+        inner: MemoryStore,
+    }
+
+    impl SecretStore for FlakyStore {
+        fn get(&self, key: &str) -> AppResult<Option<String>> {
+            if key.ends_with("fail") {
+                return Err(app_err!(
+                    ErrorCode::Internal,
+                    "errors.secrets.keychain",
+                    "Cannot access the system secret store"
+                )
+                .with_details("locked"));
+            }
+            self.inner.get(key)
+        }
+
+        fn set(&self, key: &str, value: &str) -> AppResult<()> {
+            self.inner.set(key, value)
+        }
+
+        fn delete(&self, key: &str) -> AppResult<()> {
+            self.inner.delete(key)
+        }
+    }
 
     fn state(dir: &std::path::Path) -> AppState {
         AppState::new(dir)
@@ -225,6 +278,48 @@ mod tests {
                 .starts_with("AGENT_UNREACHABLE: "),
             "{:?}",
             out[1].message
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_survives_a_keystore_error_for_one_agent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let st = AppState::new(&tmp.path().join("data"))
+            .unwrap()
+            .with_secrets(Arc::new(FlakyStore::default()));
+        let path = tmp.path().join("p").to_string_lossy().into_owned();
+        create(&path, "t").unwrap();
+        let ready = serve(info_router(APP_VERSION, None, "secret-1")).await;
+        let d = ProjectDir::open(&path).unwrap();
+        d.save_manifest(&manifest_with_agents(vec![
+            agent("gen-1", &ready),
+            agent("fail", &ready),
+            agent("gen-3", &ready),
+        ]))
+        .unwrap();
+        set_token(
+            &st,
+            path.clone(),
+            "test".into(),
+            "gen-1".into(),
+            Some("secret-1".into()),
+        )
+        .await
+        .unwrap();
+        let out = probe(&st, path, "test".into()).await.unwrap();
+        let states: Vec<ProbeState> = out.iter().map(|s| s.state).collect();
+        assert_eq!(
+            states,
+            [
+                ProbeState::Ready,
+                ProbeState::Unreachable,
+                ProbeState::NoToken
+            ]
+        );
+        let message = out[1].message.as_deref().unwrap_or("");
+        assert!(
+            message.contains("secret store") && message.contains("locked"),
+            "{message}"
         );
     }
 }
