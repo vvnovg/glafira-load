@@ -6,6 +6,7 @@ pub mod agent_api;
 pub mod agent_link;
 pub mod avro;
 pub mod context;
+pub mod controller;
 pub mod errors;
 pub mod executor;
 pub mod expect;
