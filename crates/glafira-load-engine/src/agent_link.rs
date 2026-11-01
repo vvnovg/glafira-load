@@ -744,6 +744,95 @@ mod tests {
         );
     }
 
+    /// Исполнитель Kafka, у которого падает опрос лага: планировщик вернёт `Failed`.
+    struct PanickingLag;
+
+    #[async_trait]
+    impl StepExecutor for PanickingLag {
+        async fn execute(
+            &self,
+            _step: &glafira_load_model::suite::Step,
+            _ctx: &mut crate::context::IterationCtx<'_>,
+        ) -> Result<crate::executor::StepOutcome, crate::errors::StepError> {
+            Ok(crate::executor::StepOutcome::default())
+        }
+
+        async fn lag(&self) -> BTreeMap<String, i64> {
+            panic!("lag probe failed")
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_scheduler_ends_the_run_with_failed_done() {
+        let factory: ExecutorFactory =
+            Arc::new(|req: RunRequest, suite: Suite, ctx: Arc<RunContext>| {
+                Box::pin(async move {
+                    let http = crate::http::HttpExecutor::new(
+                        req.env.http.as_deref().unwrap_or(""),
+                        &suite.defaults.http,
+                        &ctx.secret_values(),
+                    )
+                    .map_err(|m| EngineError::new("INVALID_INPUT", m))?;
+                    Ok(Executors {
+                        http,
+                        kafka: Some(Box::new(PanickingLag) as Box<dyn StepExecutor>),
+                    })
+                })
+            });
+        let agent = LocalAgent::new("local", factory);
+        let suite = "format: 1\nname: s\nscenarios:\n  - id: a\n    steps:\n      - kafka_produce: { operation: \"kafka_produce:t\" }\n";
+        let req = RunRequest {
+            run_id: "r1".into(),
+            agent_id: "local".into(),
+            suite_name: "s".into(),
+            controller_version: VERSION.into(),
+            suite_format: glafira_load_model::suite::FORMAT,
+            env: EnvAddresses {
+                http: Some("http://127.0.0.1:1".into()),
+                kafka: None,
+                schema_registry: None,
+            },
+            secrets: vec![],
+            targets: BTreeMap::from([("kafka_produce:t".to_string(), 5.0)]),
+            timeline: vec![
+                glafira_load_model::profile::Point {
+                    minute: 0.0,
+                    pct: 100.0,
+                },
+                glafira_load_model::profile::Point {
+                    minute: 0.03,
+                    pct: 100.0,
+                },
+            ],
+            total_minutes: 0.03,
+            max_in_flight: 10,
+            arrival: glafira_load_model::suite::Arrival::Constant,
+            mode: Mode::Run,
+            kafka: BTreeMap::new(),
+            response_schemas: BTreeMap::new(),
+            avro_schemas: BTreeMap::new(),
+        };
+        agent.start(&req, suite, &BTreeMap::new()).await.unwrap();
+        assert_eq!(agent.is_busy().as_deref(), Some("r1"));
+        let mut events = agent.events("r1", None).await.unwrap();
+        let mut done = None;
+        while let Some((_, ev)) = events.next().await {
+            if let Event::Done(s) = ev {
+                done = Some(s);
+            }
+        }
+        assert_eq!(done.expect("done event").status, RunStatus::Failed);
+        let tar = agent.files("r1").await.unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        tar::Archive::new(&tar[..]).unpack(tmp.path()).unwrap();
+        assert!(
+            std::fs::read_to_string(tmp.path().join(SUMMARY_FILE))
+                .unwrap()
+                .contains("status: failed")
+        );
+        assert_eq!(agent.is_busy(), None, "после files агент свободен");
+    }
+
     #[test]
     fn engine_error_helpers_keep_code_names_and_agent() {
         let io = EngineError::io("disk full");

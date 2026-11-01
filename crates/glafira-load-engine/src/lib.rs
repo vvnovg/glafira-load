@@ -12,6 +12,7 @@ pub mod expect;
 pub mod extract;
 pub mod http;
 pub mod kafka;
+pub mod local;
 pub mod metrics;
 pub mod run_files;
 pub mod scheduler;

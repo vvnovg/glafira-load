@@ -1,0 +1,18 @@
+format: 1
+name: orders-http
+defaults:
+  http: { timeout_ms: 2000 }
+  arrival: constant
+  max_in_flight: 100
+scenarios:
+  - id: order-flow
+    steps:
+      - id: create
+        http:
+          operation: "http:orders:POST /v1/orders"
+          body: { customerId: "{{uuid}}", qty: "{{int 1 5}}" }
+        expect: { status: 201, jsonpath: { "$.id": exists } }
+        extract: { order_id: "$.id" }
+      - id: get
+        http: { operation: "http:orders:GET /v1/orders/{id}", path: { id: "{{steps.create.order_id}}" } }
+        expect: { status: 200 }
